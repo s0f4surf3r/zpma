@@ -1,0 +1,6 @@
+# OS
+.DS_Store
+
+# Original Q3/CPMA game files (large binaries)
+Q3 with CPMA/
+cpma-mappack-full/

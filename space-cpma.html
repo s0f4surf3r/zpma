@@ -1,0 +1,1729 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Space CPMA – Defrag Prototyp</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a1628; overflow: hidden; cursor: none; }
+canvas { display: block; width: 100vw; height: 100vh; }
+
+#hud {
+  position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+  font-family: 'Courier New', monospace; font-size: 48px; font-weight: bold;
+  color: #2abfbf; text-shadow: 0 0 8px rgba(42,191,191,0.5);
+  pointer-events: none; z-index: 10; user-select: none;
+}
+
+#debug {
+  position: fixed; top: 10px; left: 10px;
+  font-family: 'Courier New', monospace; font-size: 14px;
+  color: #3a6080; opacity: 0.8;
+  pointer-events: none; z-index: 10; user-select: none;
+  line-height: 1.5;
+}
+
+#crosshair {
+  position: fixed; top: 50%; left: 50%;
+  width: 20px; height: 20px; transform: translate(-50%, -50%);
+  pointer-events: none; z-index: 10;
+}
+#crosshair::before, #crosshair::after {
+  content: ''; position: absolute; background: var(--ch-color, rgba(240,236,230,0.8));
+}
+#crosshair::before { width: 2px; height: 20px; left: 9px; top: 0; }
+#crosshair::after  { width: 20px; height: 2px; top: 9px; left: 0; }
+
+#overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  background: rgba(10,22,40,0.9); z-index: 20; cursor: default;
+  font-family: 'Courier New', monospace;
+}
+#overlay.hidden { display: none; }
+.menu-title {
+  font-size: 42px; color: #f0ece6; font-weight: bold;
+  text-shadow: 0 0 16px rgba(42,191,191,0.6);
+  margin-bottom: 36px;
+}
+.menu-row {
+  display: flex; align-items: center; gap: 12px; margin: 8px 0;
+}
+.menu-label {
+  color: #3a6080; font-size: 15px; width: 70px; text-align: right;
+}
+.menu-btn {
+  font-family: 'Courier New', monospace; font-size: 15px;
+  padding: 7px 18px; background: #0a1628; color: #3a6080;
+  border: 1px solid #1a3a5c; cursor: pointer; outline: none;
+}
+.menu-btn:hover { background: #1a3a5c; color: #f0ece6; border-color: #3a6080; }
+.menu-btn.active {
+  background: #1a3a5c; color: #2abfbf; border-color: #2abfbf;
+  text-shadow: 0 0 6px rgba(42,191,191,0.4);
+}
+.menu-start {
+  margin-top: 36px; font-size: 22px; color: #e86a7a; cursor: pointer;
+  text-shadow: 0 0 10px rgba(232,106,122,0.5);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.menu-start:hover { color: #f4a842; }
+@keyframes pulse { 0%,100%{opacity:0.6} 50%{opacity:1} }
+
+#dmgflash {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: radial-gradient(ellipse at center, transparent 30%, rgba(232,106,122,0.5) 100%);
+  pointer-events: none; z-index: 15; opacity: 0;
+}
+</style>
+</head>
+<body>
+
+<div id="hud">0</div>
+<div id="debug"></div>
+<div id="crosshair"></div>
+<div id="dmgflash"></div>
+<div id="overlay">
+  <div class="menu-title">SPACE CPMA</div>
+  <div class="menu-row">
+    <span class="menu-label">MODE</span>
+    <button class="menu-btn active" id="btn-rocket">ROCKET</button>
+    <button class="menu-btn" id="btn-instagib">INSTAGIB</button>
+    <button class="menu-btn" id="btn-mixed">MIXED</button>
+  </div>
+  <div class="menu-row">
+    <span class="menu-label">BOT</span>
+    <button class="menu-btn active" id="btn-bot-on">ARMED</button>
+    <button class="menu-btn" id="btn-bot-off">PASSIVE</button>
+  </div>
+  <div class="menu-row">
+    <span class="menu-label">BOTS</span>
+    <button class="menu-btn active" id="btn-bots1">1</button>
+    <button class="menu-btn" id="btn-bots2">2</button>
+    <button class="menu-btn" id="btn-bots3">3</button>
+    <button class="menu-btn" id="btn-bots4">4</button>
+  </div>
+  <div class="menu-start" id="startBtn">Click to Play</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// === SETTINGS (menu-configurable) ===
+const settings = { mode: 'rocket', botShoots: true, botCount: 1 };
+
+// === CONFIG ===
+const CFG = {
+  sv_gravity: 800,
+  sv_maxspeed: 320,
+  sv_friction: 6,
+  sv_stopspeed: 100,
+  sv_accelerate: 10,
+  sv_airaccelerate: 1,
+  cpm_aircontrol: 150,
+  cpm_strafeaccelerate: 70,
+  cpm_airstopaccelerate: 2.5,
+  cpm_wishspeed: 30,
+  sv_jumpvelocity: 280,
+  sensitivity: 0.002,
+  playerHeight: 56,
+  eyeHeight: 52,
+  playerRadius: 16,
+  tickRate: 0.008,
+  stepUp: 22,
+  // Rockets
+  rk_speed: 1000,
+  rk_radius: 120,
+  rk_knockback: 650,
+  rk_fireRate: 0.8,
+  rk_selfKB: 1.0
+};
+
+// === AUDIO ===
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const sndBuf = {};
+let footstepDist = 0;
+let wasOnGround = false;
+
+async function loadSound(name, url) {
+  try {
+    const r = await fetch(url);
+    const ab = await r.arrayBuffer();
+    sndBuf[name] = await audioCtx.decodeAudioData(ab);
+  } catch(e) { console.warn('Sound load failed:', name, e); }
+}
+
+function playSound(name, vol) {
+  if (!sndBuf[name] || audioCtx.state === 'suspended') return;
+  const s = audioCtx.createBufferSource();
+  const g = audioCtx.createGain();
+  s.buffer = sndBuf[name];
+  g.gain.value = vol !== undefined ? vol : 1.0;
+  s.connect(g).connect(audioCtx.destination);
+  s.start();
+}
+
+Promise.all([
+  loadSound('rocketFire', 'assets/sounds/rocklf1a.wav'),
+  loadSound('rocketExplode', 'assets/sounds/rocklx1a.wav'),
+  loadSound('jump', 'assets/sounds/jump1.wav'),
+  loadSound('land', 'assets/sounds/land1.wav'),
+  loadSound('boot1', 'assets/sounds/boot1.wav'),
+  loadSound('boot2', 'assets/sounds/boot2.wav'),
+  loadSound('boot3', 'assets/sounds/boot3.wav'),
+  loadSound('boot4', 'assets/sounds/boot4.wav'),
+  loadSound('telein', 'assets/sounds/telein.wav'),
+  loadSound('jumppad', 'assets/sounds/jumppad.wav'),
+  loadSound('hit', 'assets/sounds/hit.wav'),
+  loadSound('railFire', 'assets/sounds/railgf1a.wav'),
+]);
+
+// === INPUT ===
+const keys = { w: false, s: false, a: false, d: false, space: false, shift: false };
+let mouseDX = 0, mouseDY = 0;
+let pointerLocked = false;
+let firePressed = false;
+
+document.addEventListener('keydown', e => {
+  switch(e.code) {
+    case 'KeyW': keys.w = true; break;
+    case 'KeyS': keys.s = true; break;
+    case 'KeyA': keys.a = true; break;
+    case 'KeyD': keys.d = true; break;
+    case 'Space': keys.space = true; e.preventDefault(); break;
+    case 'ShiftLeft': case 'ShiftRight': keys.shift = true; break;
+    case 'KeyQ': if (settings.mode === 'mixed') player.weapon = 'rocket'; break;
+    case 'KeyR': if (settings.mode === 'mixed') player.weapon = 'rail'; break;
+  }
+});
+document.addEventListener('keyup', e => {
+  switch(e.code) {
+    case 'KeyW': keys.w = false; break;
+    case 'KeyS': keys.s = false; break;
+    case 'KeyA': keys.a = false; break;
+    case 'KeyD': keys.d = false; break;
+    case 'Space': keys.space = false; break;
+    case 'ShiftLeft': case 'ShiftRight': keys.shift = false; break;
+  }
+});
+document.addEventListener('mousemove', e => {
+  if (!pointerLocked) return;
+  mouseDX += e.movementX;
+  mouseDY += e.movementY;
+});
+document.addEventListener('mousedown', e => {
+  if (e.button === 0 && pointerLocked) firePressed = true;
+});
+
+// Pointer Lock + Settings Menu
+const overlay = document.getElementById('overlay');
+const crosshairEl = document.getElementById('crosshair');
+
+function setModeBtn(id) {
+  ['btn-rocket','btn-instagib','btn-mixed'].forEach(b =>
+    document.getElementById(b).classList.toggle('active', b === id));
+}
+document.getElementById('btn-rocket').onclick = (e) => {
+  e.stopPropagation(); settings.mode = 'rocket'; setModeBtn('btn-rocket');
+};
+document.getElementById('btn-instagib').onclick = (e) => {
+  e.stopPropagation(); settings.mode = 'instagib'; setModeBtn('btn-instagib');
+};
+document.getElementById('btn-mixed').onclick = (e) => {
+  e.stopPropagation(); settings.mode = 'mixed'; setModeBtn('btn-mixed');
+};
+document.getElementById('btn-bot-on').onclick = (e) => {
+  e.stopPropagation(); settings.botShoots = true;
+  document.getElementById('btn-bot-on').classList.add('active');
+  document.getElementById('btn-bot-off').classList.remove('active');
+};
+document.getElementById('btn-bot-off').onclick = (e) => {
+  e.stopPropagation(); settings.botShoots = false;
+  document.getElementById('btn-bot-off').classList.add('active');
+  document.getElementById('btn-bot-on').classList.remove('active');
+};
+function setBotCountBtn(id) {
+  ['btn-bots1','btn-bots2','btn-bots3','btn-bots4'].forEach(b =>
+    document.getElementById(b).classList.toggle('active', b === id));
+}
+document.getElementById('btn-bots1').onclick = (e) => { e.stopPropagation(); settings.botCount = 1; setBotCountBtn('btn-bots1'); initBots(); };
+document.getElementById('btn-bots2').onclick = (e) => { e.stopPropagation(); settings.botCount = 2; setBotCountBtn('btn-bots2'); initBots(); };
+document.getElementById('btn-bots3').onclick = (e) => { e.stopPropagation(); settings.botCount = 3; setBotCountBtn('btn-bots3'); initBots(); };
+document.getElementById('btn-bots4').onclick = (e) => { e.stopPropagation(); settings.botCount = 4; setBotCountBtn('btn-bots4'); initBots(); };
+document.getElementById('startBtn').addEventListener('click', () => {
+  document.body.requestPointerLock();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+});
+document.addEventListener('click', (e) => {
+  if (pointerLocked || e.target.closest('.menu-btn') || e.target.closest('.menu-start')) return;
+  // Click anywhere else on overlay also starts
+  if (!pointerLocked) document.body.requestPointerLock();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+});
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = !!document.pointerLockElement;
+  overlay.classList.toggle('hidden', pointerLocked);
+  // Update crosshair color for weapon mode
+  const chColor = settings.mode === 'instagib' ? 'rgba(42,191,191,0.9)' :
+    settings.mode === 'mixed' ? 'rgba(42,191,191,0.9)' : 'rgba(240,236,230,0.8)';
+  crosshairEl.style.setProperty('--ch-color', chColor);
+});
+
+// === RENDERER ===
+const renderer = new THREE.WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x1a3a5c, 2000, 5000);
+
+// Skybox — cpm3a original (iceflow)
+const skyLoader = new THREE.CubeTextureLoader();
+skyLoader.setPath('assets/skybox/');
+scene.background = skyLoader.load([
+  'iceflow_rt.jpg', 'iceflow_lf.jpg',
+  'iceflow_up.jpg', 'iceflow_dn.jpg',
+  'iceflow_bk.jpg', 'iceflow_ft.jpg'
+]);
+const camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 1, 5000);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// Lighting — Original Zoe-Palette
+scene.add(new THREE.AmbientLight(0x887766, 0.5));
+const sunLight = new THREE.DirectionalLight(0xfff0d0, 1.5);
+sunLight.position.set(500, 800, 200);
+scene.add(sunLight);
+const fillLight = new THREE.DirectionalLight(0x6688aa, 0.3);
+fillLight.position.set(-400, 300, -500);
+scene.add(fillLight);
+const hemiLight = new THREE.HemisphereLight(0x88aacc, 0x554433, 0.6);
+scene.add(hemiLight);
+
+// === LEVEL — cpm3a BSP geometry + Dust2 look ===
+// 757 boxes extracted from cpm3a.bsp [cx, cy, cz, w, h, d]
+const M=[[776,-288,480,16,128,64],[224,-32,-144,32,192,64],[40,-32,-144,336,192,64],[136,-80,-248,528,96,176],[-232,72,656,16,16,64],[-232,152,656,16,144,64],[-248,176,656,16,96,64],[-176,152,928,96,144,32],[-32,188,928,128,120,32],[-240,116,928,32,264,32],[-112,116,928,32,264,32],[-80,116,896,32,264,32],[-448,156,928,384,184,32],[-448,20,928,384,56,32],[240,188,744,32,120,240],[240,124,1016,32,248,304],[16,124,1032,32,248,272],[240,96,744,32,64,240],[-248,96,656,16,64,64],[-176,72,928,96,16,32],[-32,96,928,128,64,32],[528,96,-264,352,128,80],[472,192,-264,464,64,80],[472,0,-264,464,64,80],[248,96,-80,16,256,32],[248,176,-152,16,96,112],[248,256,-152,16,64,112],[248,336,-152,16,96,112],[248,96,-152,16,64,112],[248,48,-152,16,32,112],[272,96,-144,32,128,160],[272,192,-144,32,64,160],[248,0,-160,16,64,128],[272,6,-144,32,52,160],[264,-80,-96,48,96,64],[264,192,32,48,64,192],[264,96,32,48,128,192],[336,128,560,192,192,64],[360,192,336,144,64,32],[360,128,608,144,192,32],[360,0,608,144,64,32],[264,-26,32,48,12,192],[392,-26,472,304,12,240],[416,-26,336,256,12,32],[1216,-288,-352,112,128,32],[-672,48,816,32,128,112],[-664,208,816,48,192,112],[-712,44,816,48,136,192],[-656,184,892,32,240,40],[-656,24,892,32,48,40],[-464,20,704,416,56,32],[-464,96,704,416,64,32],[-240,104,704,32,240,32],[-464,176,704,416,96,32],[-656,184,740,32,240,40],[-656,24,740,32,48,40],[1216,-116,-336,224,152,32],[1216,-208,-336,224,32,32],[1132,-296,-336,56,80,32],[264,-48,16,48,32,288],[-336,96,-160,32,64,32],[-336,176,-160,32,96,32],[-336,176,32,32,96,32],[-336,96,32,32,64,32],[-336,-80,-88,32,96,240],[-336,-80,-312,32,96,208],[-168,-80,-320,16,96,224],[-264,-80,-424,176,96,16],[-448,176,-192,256,96,32],[-464,96,-192,224,64,32],[-464,16,-240,224,96,32],[184,336,-184,112,96,16],[184,176,-184,112,96,16],[112,144,-200,32,160,16],[112,144,-616,32,160,16],[-48,144,-616,32,160,16],[136,144,-224,16,160,32],[-72,144,-592,16,160,32],[136,144,-592,16,160,32],[0,176,-200,192,96,16],[0,336,-184,256,96,16],[16,176,-184,224,96,16],[-112,144,-192,32,160,32],[-304,104,-296,32,48,240],[-304,176,-296,32,96,240],[-304,336,-296,32,96,240],[-272,304,-312,32,160,208],[-272,144,-192,32,160,32],[-272,176,-312,32,96,208],[-44,176,-632,40,96,16],[-28,176,-616,8,96,16],[108,176,-632,40,96,16],[92,176,-616,8,96,16],[-44,96,-632,40,64,16],[-28,104,-616,8,48,16],[108,96,-632,40,64,16],[92,104,-616,8,48,16],[32,208,-624,112,32,32],[32,128,-632,112,128,16],[-160,176,-496,192,96,160],[-168,152,-592,176,144,32],[176,176,-408,96,96,336],[184,152,-592,80,144,32],[184,152,-224,80,144,32],[176,72,-408,96,16,336],[184,72,-592,80,16,32],[-160,72,-496,192,16,160],[-168,72,-592,176,16,32],[72,96,-184,336,64,16],[0,72,-200,192,16,16],[-288,72,-312,64,16,208],[-304,72,-192,32,16,32],[40,-28,-24,16,8,144],[24,-20,-24,16,8,144],[8,-12,-24,16,8,144],[-8,-4,-24,16,8,144],[-24,4,-24,16,8,144],[-40,12,-24,16,8,144],[-56,20,-24,16,8,144],[-72,28,-24,16,8,144],[-88,36,-24,16,8,144],[-104,44,-24,16,8,144],[-120,52,-24,16,8,144],[-360,-12,816,16,8,160],[-344,-4,816,16,8,160],[-328,4,816,16,8,160],[-312,12,816,16,8,160],[-296,20,816,16,8,160],[-280,28,816,16,8,160],[-264,36,816,16,8,160],[-248,44,816,16,8,160],[-232,52,816,16,8,160],[-216,60,816,16,8,160],[-360,-20,728,16,24,16],[-360,-20,904,16,24,16],[-344,-16,904,16,32,16],[-328,-12,904,16,40,16],[-312,-8,904,16,48,16],[-296,-4,904,16,56,16],[-280,0,904,16,64,16],[-264,4,904,16,72,16],[-248,8,904,16,80,16],[-232,12,904,16,88,16],[-160,16,904,128,96,16],[-344,-16,728,16,32,16],[-328,-12,728,16,40,16],[-312,-8,728,16,48,16],[-296,-4,728,16,56,16],[-280,0,728,16,64,16],[-264,4,728,16,72,16],[-248,8,728,16,80,16],[-232,12,728,16,88,16],[-216,16,672,16,96,128],[776,-352,216,16,32,16],[776,-440,216,16,144,16],[832,-348,200,96,8,16],[832,-340,216,96,8,16],[832,-332,232,96,8,16],[832,-324,248,96,8,16],[832,-316,264,96,8,16],[832,-308,280,96,8,16],[832,-300,296,96,8,16],[832,-292,312,96,8,16],[832,-284,328,96,8,16],[832,-276,344,96,8,16],[832,-268,360,96,8,16],[776,-348,200,16,8,16],[776,-420,232,16,184,16],[776,-416,248,16,192,16],[776,-412,264,16,200,16],[888,-352,216,16,32,16],[888,-440,216,16,144,16],[888,-348,200,16,8,16],[888,-348,232,16,40,16],[888,-440,232,16,144,16],[888,-344,248,16,48,16],[888,-440,248,16,144,16],[888,-340,264,16,56,16],[888,-440,264,16,144,16],[888,-336,280,16,64,16],[888,-440,280,16,144,16],[888,-332,296,16,72,16],[888,-440,296,16,144,16],[888,-328,312,16,80,16],[888,-440,312,16,144,16],[888,-324,328,16,88,16],[888,-440,328,16,144,16],[888,-392,344,16,240,16],[888,-388,360,16,248,16],[888,-292,424,16,120,16],[888,-296,408,16,112,16],[888,-300,392,16,104,16],[888,-304,376,16,96,16],[776,-408,280,16,208,16],[776,-404,296,16,216,16],[776,-400,312,16,224,16],[776,-396,328,16,232,16],[776,-392,344,16,240,16],[776,-388,360,16,248,16],[832,-260,376,96,8,16],[832,-252,392,96,8,16],[832,-244,408,96,8,16],[832,-236,424,96,8,16],[776,-292,424,16,120,16],[776,-296,408,16,112,16],[776,-300,392,16,104,16],[776,-304,376,16,96,16],[40,-28,56,16,8,16],[72,-48,152,80,32,16],[112,-48,40,160,32,208],[208,-48,24,32,32,112],[208,-62,-48,32,4,32],[208,-62,96,32,4,32],[232,-48,24,16,32,176],[216,-48,128,48,32,32],[216,-48,-80,48,32,32],[112,-48,-80,160,32,32],[136,-96,0,208,64,256],[72,-96,144,80,64,32],[184,-48,376,112,32,432],[264,-48,240,48,32,160],[304,-48,240,32,32,160],[336,-48,312,32,32,16],[336,-48,216,32,32,112],[392,-48,240,80,32,160],[292,-132,324,32,104,16],[292,-132,156,32,104,16],[356,92,-228,32,104,16],[-448,144,-180,32,104,16],[-384,-128,156,32,104,16],[-384,-128,292,32,104,16],[-260,-84,444,16,104,32],[-156,-84,596,32,104,16],[24,-84,460,32,104,16],[244,124,528,16,104,32],[-580,-128,224,16,104,32],[-332,144,692,32,104,16],[628,92,-228,32,104,16],[284,92,28,16,104,32],[176,-132,156,32,104,16],[176,-132,324,32,104,16],[396,-132,536,16,104,32],[396,-132,792,16,104,32],[588,-132,388,16,104,32],[868,-132,760,16,104,32],[600,-132,620,32,104,16],[944,100,596,32,104,16],[1140,100,392,16,104,32],[256,-184,368,288,48,32],[272,-184,336,256,48,32],[272,-216,336,256,16,32],[256,-184,664,288,48,560],[256,-256,632,288,64,624],[256,-112,784,288,96,320],[256,-112,504,288,96,176],[272,-112,336,256,96,32],[264,-112,608,272,96,32],[-128,-168,-136,384,80,592],[-216,-352,152,208,128,16],[760,-112,992,208,96,96],[600,-144,1088,112,160,96],[484,-112,992,120,96,96],[600,-80,992,112,32,96],[160,-160,-352,544,256,32],[416,-160,-264,32,256,208],[-544,-214,-216,64,148,336],[192,-184,144,96,48,32],[-440,176,224,16,96,128],[-384,-26,224,128,12,128],[-400,176,104,96,96,48],[-376,176,224,112,96,128],[-400,176,144,96,96,32],[-400,176,64,96,96,32],[-400,96,104,96,64,48],[-384,96,224,128,64,128],[-400,96,144,96,64,32],[-400,96,64,96,64,32],[-336,336,104,32,96,112],[-336,144,104,32,160,48],[-336,96,144,32,256,32],[-272,0,304,32,448,32],[-336,96,64,32,256,32],[-400,-32,72,96,192,16],[-336,-26,104,32,12,48],[-144,-96,152,352,64,16],[-280,-48,132,48,32,24],[-296,-48,104,16,32,32],[-112,-48,104,288,32,80],[-280,-48,76,48,32,24],[-144,-96,104,352,64,80],[-224,16,-64,192,96,224],[-56,16,-632,16,96,48],[-56,16,-600,16,96,16],[32,16,-592,144,96,16],[32,16,-496,176,96,176],[120,16,-632,16,96,48],[120,16,-600,16,96,16],[124,16,-408,8,96,368],[120,16,-216,16,96,16],[-156,16,-312,184,96,192],[-224,-16,56,192,32,16],[-464,-248,144,224,80,32],[-512,22,152,128,84,16],[-512,16,136,128,96,16],[-512,16,112,128,96,32],[-512,16,-40,128,96,272],[-640,176,88,128,96,528],[-640,96,88,128,64,528],[-588,-120,32,24,176,512],[-384,16,-64,128,96,224],[-400,16,56,96,96,16],[232,-232,308,208,16,24],[-184,-232,400,144,16,128],[-128,-232,248,256,16,176],[16,-232,248,32,16,176],[72,-232,248,80,16,176],[232,-352,456,240,128,272],[80,-328,272,64,176,224],[232,-432,240,240,32,160],[-72,-296,544,368,112,160],[-72,-232,608,368,16,32],[-136,-232,528,240,16,128],[168,-320,768,208,64,160],[48,-312,768,32,80,160],[16,-304,768,32,96,160],[-16,-296,768,32,112,160],[-144,-288,768,224,128,160],[-144,-288,656,160,128,64],[176,336,416,128,96,64],[104,-112,424,16,32,80],[0,-448,312,224,64,304],[-416,-296,224,320,112,128],[-352,-232,224,192,16,128],[176,128,608,96,192,32],[-160,-96,600,128,128,16],[72,-88,768,336,144,288],[72,152,752,336,144,256],[72,72,752,336,16,256],[72,24,752,336,80,256],[88,104,896,304,240,32],[16,-96,608,160,128,32],[-80,32,608,32,384,32],[112,32,608,32,384,32],[128,-216,336,32,16,32],[128,-136,144,32,144,32],[264,96,144,48,256,32],[264,96,336,48,256,32],[104,-224,656,272,128,64],[-72,-184,608,368,48,32],[-240,32,608,32,384,32],[184,-26,608,112,12,32],[176,-192,608,128,64,32],[184,-112,608,112,96,32],[264,336,552,48,96,1232],[264,256,552,48,64,1232],[-208,256,-500,160,64,216],[-208,352,-392,160,128,432],[640,320,-144,704,192,160],[752,320,-48,320,192,32],[752,320,8,256,192,80],[752,320,64,256,192,32],[752,300,32,256,8,128],[1120,320,252,32,192,456],[864,320,536,544,192,112],[440,320,264,304,192,656],[-8,336,520,496,96,144],[-40,352,656,560,128,128],[-8,256,672,496,64,96],[-544,320,104,384,192,48],[-528,320,1040,416,192,256],[-528,336,440,416,96,560],[-544,320,144,384,192,32],[-544,256,-64,384,64,224],[-528,336,-64,416,96,224],[-544,320,64,384,192,32],[-664,-72,520,80,272,144],[-520,-72,560,208,272,224],[-520,-32,800,336,32,224],[-152,32,664,112,64,112],[-152,60,808,112,8,176],[-160,28,816,128,56,192],[128,32,744,192,64,240],[128,-16,1048,192,32,176],[-344,-80,640,144,288,96],[-344,-48,520,144,224,144],[-336,-184,520,160,48,144],[-416,-26,336,320,12,32],[-432,-80,312,288,288,16],[-432,-120,296,288,176,16],[144,-352,-272,512,128,320],[832,-368,184,96,32,16],[832,-368,136,96,32,16],[772,-368,136,8,32,112],[832,-368,160,32,32,32],[832,-368,88,96,32,16],[832,-368,112,32,32,32],[1040,-440,96,128,144,32],[884,-368,136,8,32,112],[832,-368,200,128,32,16],[832,-440,272,96,144,128],[1216,-368,-352,224,32,64],[1216,-368,-156,208,32,200],[1316,-368,-272,8,32,32],[1216,-368,-272,128,32,32],[1116,-368,-272,8,32,32],[1216,-368,-300,208,32,24],[1216,-64,-300,224,64,40],[1116,-64,-120,24,64,320],[1264,-64,-120,64,64,48],[1216,-64,-120,32,64,304],[1168,-64,-120,64,64,48],[1300,-64,-120,8,64,304],[1216,-64,36,176,64,8],[1024,-368,60,96,32,24],[1024,-368,-44,96,32,24],[992,-368,8,32,32,16],[1056,-368,8,32,32,16],[1024,-368,8,32,32,80],[844,-368,8,136,32,128],[1088,-368,8,32,32,128],[664,-368,-224,208,32,128],[1016,-428,400,240,168,128],[832,-432,400,128,160,128],[752,-496,72,384,224,784],[-456,-352,-240,112,128,480],[-24,-352,88,176,128,144],[960,192,8,32,64,144],[960,96,44,32,128,72],[960,-26,8,32,12,144],[832,-240,-336,544,416,32],[544,-400,-240,32,96,224],[1024,-400,-208,160,96,224],[960,-144,-80,32,736,32],[968,-272,96,16,480,32],[952,-272,96,16,480,32],[1040,-64,-192,128,64,256],[1040,-144,-192,128,96,256],[1040,-296,-192,128,80,256],[1040,-344,-192,128,16,256],[1040,-432,-80,128,160,32],[960,-448,8,32,128,144],[1120,-512,8,32,256,144],[1040,-576,8,128,128,144],[1024,-64,-208,160,64,224],[1024,-144,8,160,64,144],[840,-48,432,208,32,160],[568,-218,480,48,12,288],[1040,-112,448,192,96,224],[1136,-112,224,384,96,224],[1152,-128,96,352,128,32],[1152,-296,96,352,80,32],[1152,-344,96,352,16,32],[1216,-432,96,224,160,32],[416,-48,-288,32,32,288],[360,-48,32,144,32,256],[360,-40,-168,144,48,112],[488,-24,-168,112,16,112],[552,-24,-168,16,16,112],[752,-24,-224,384,16,192],[896,-8,-112,96,16,32],[624,-24,-104,384,16,16],[360,-24,-104,144,16,16],[688,-24,-120,256,16,16],[456,-48,240,48,32,160],[496,-48,312,32,32,16],[496,-48,216,32,32,112],[528,-48,240,32,32,160],[472,-288,776,240,128,528],[648,-288,608,112,128,192],[928,-272,472,32,96,240],[920,-280,344,48,80,16],[832,-288,440,128,128,16],[840,-288,696,112,128,496],[690,-288,864,21,128,159],[552,-368,392,400,288,80],[952,-48,224,16,32,224],[1344,-128,8,32,128,656],[1344,-296,8,32,80,656],[1344,-344,8,32,16,656],[1216,-288,-368,224,192,32],[32,160,-656,192,192,32],[892,-48,584,24,32,16],[888,-48,528,32,32,32],[944,-48,552,80,32,80],[996,-48,584,24,32,16],[1000,-48,528,32,32,32],[904,-112,768,80,96,352],[728,-360,704,272,16,480],[944,192,600,128,64,16],[944,96,600,128,128,16],[944,-26,600,128,12,16],[1144,192,392,16,64,240],[1144,96,452,16,128,120],[1144,-26,392,16,12,240],[552,-48,32,16,32,256],[392,-368,32,304,288,256],[552,-376,32,16,272,256],[580,-136,-112,232,144,32],[288,-216,32,288,16,256],[336,-112,32,192,96,256],[496,6,32,128,52,256],[-208,448,248,64,128,16],[-248,448,128,16,128,384],[-288,448,112,64,128,352],[-40,448,-128,560,128,96],[232,448,128,16,128,384],[-8,448,464,496,128,256],[192,448,248,64,128,16],[192,448,288,64,128,64],[-168,448,288,16,128,64],[-208,448,288,64,128,64],[-88,448,288,16,128,64],[-8,448,288,16,128,64],[72,448,288,16,128,64],[152,448,288,16,128,64],[-208,448,168,64,128,16],[192,448,168,64,128,16],[-208,448,88,64,128,16],[192,448,88,64,128,16],[192,448,8,64,128,16],[-208,448,-32,64,128,64],[-208,448,8,64,128,16],[8,448,16,304,128,32],[144,448,144,32,128,224],[-8,448,240,272,128,32],[-160,448,128,32,128,256],[-8,464,128,464,96,384],[-168,448,-32,16,128,64],[-88,448,-32,16,128,64],[-8,448,-32,16,128,64],[72,448,-32,16,128,64],[192,448,-32,64,128,64],[152,448,-32,16,128,64],[496,192,32,128,64,256],[496,128,32,128,64,256],[496,80,32,112,32,240],[496,48,32,128,32,256],[896,192,-112,96,64,32],[896,96,-112,96,128,32],[896,16,-112,96,32,32],[648,264,296,48,16,16],[784,264,108,16,16,56],[832,264,108,16,16,56],[784,264,428,16,16,40],[832,264,428,16,16,40],[648,264,248,48,16,16],[1136,-284,224,384,120,224],[688,-428,-112,512,168,32],[840,-24,-112,16,16,32],[824,-24,-112,16,16,32],[896,-24,-112,96,16,32],[192,-112,144,96,96,32],[336,-184,32,192,48,256],[248,336,-80,16,96,32],[248,256,-80,16,64,32],[488,-48,32,112,32,256],[-432,6,296,288,52,16],[-588,-26,32,24,12,512],[48,-232,528,128,16,128],[-512,-232,224,128,16,128],[904,-184,768,80,48,352],[760,-184,992,208,48,96],[472,-184,992,144,48,96],[256,-216,664,288,16,560],[256,-216,368,288,16,32],[472,-216,992,144,16,96],[760,-216,992,208,16,96],[904,-216,768,80,16,352],[-336,-136,144,32,144,32],[-448,56,928,384,16,32],[-656,56,892,32,16,40],[-656,56,740,32,16,40],[-464,56,704,416,16,32],[256,-112,384,288,96,64],[688,-48,-112,512,32,32],[1024,-48,8,160,32,144],[1312,172,184,32,408,912],[1144,172,-296,368,408,48],[1064,96,-108,32,256,280],[1072,240,-116,48,32,296],[1080,308,-120,64,104,304],[1256,-40,96,144,16,32],[1220,96,376,24,256,528],[1224,240,368,48,32,544],[1224,308,360,80,104,560],[1004,96,-220,88,256,56],[1004,308,-232,88,104,80],[1004,240,-228,88,32,72],[1260,172,612,72,408,56],[968,172,-256,16,408,128],[1264,-28,348,64,8,536],[1238,356,352,92,40,576],[1092,356,-120,88,40,304],[1288,372,176,64,8,912],[1292,-344,-336,40,16,32],[1140,-344,-336,40,16,32],[1320,-360,-352,16,48,64],[1112,-360,-336,16,48,32],[-160,-26,600,128,12,16],[16,128,608,160,192,32],[16,-26,608,160,12,32],[-432,-216,296,288,16,16],[-128,-248,-136,384,80,592],[-336,-248,144,32,80,32],[-464,-120,144,224,176,32],[-588,-248,32,24,80,512],[128,-136,336,32,144,32],[-336,-216,520,160,16,144],[-72,-216,608,368,16,32],[1040,-232,424,192,48,176],[1136,-216,224,384,16,224],[688,-216,-112,512,16,32],[-224,56,56,192,16,16],[-160,48,600,128,32,16],[-416,48,336,320,32,32],[-336,48,104,32,32,48],[-384,48,224,128,32,128],[-432,48,296,288,32,16],[-336,256,104,32,64,112],[-304,256,-296,32,64,240],[0,256,-184,256,64,16],[184,256,-184,112,64,16],[448,-136,-112,32,144,32],[1024,-88,8,160,48,144],[412,-112,992,24,96,96],[820,-136,-112,248,144,32],[232,128,608,16,192,32],[336,128,440,192,192,176],[1144,96,332,16,128,120],[960,96,-28,32,128,72],[296,96,-264,112,128,80],[232,-232,172,208,16,24],[232,-232,240,208,16,112],[960,-368,8,32,32,128],[-224,16,-192,192,96,32],[928,-368,8,32,32,128],[1040,-224,-192,128,64,256],[1344,-224,8,32,64,656],[1152,-224,96,352,64,32],[1300,-296,-336,56,80,32],[1300,-240,-336,56,32,32],[1132,-240,-336,56,32,32],[568,-112,480,48,96,288],[-264,144,368,16,160,96],[-264,144,432,16,160,32],[-224,24,56,192,48,16],[92,72,-616,8,16,16],[-28,72,-616,8,16,16],[176,104,-408,96,48,336],[-160,104,-496,192,48,160],[-272,104,-312,32,48,208],[0,104,-200,192,48,16],[772,-368,8,8,32,144],[844,-368,-60,136,32,8],[780,-368,136,8,32,112],[892,-368,136,8,32,112],[900,-368,76,24,32,8],[832,-368,76,112,32,8],[-656,-12,740,32,8,40],[-464,-12,704,416,8,32],[-656,-12,892,32,8,40],[-448,-12,928,384,8,32],[-656,-4,892,32,8,40],[-656,-4,740,32,8,40],[1008,-368,-60,192,32,8],[1120,-368,76,416,32,8],[1324,-368,-124,8,32,392],[1212,-368,8,216,32,128],[1108,-368,-188,8,32,264],[1216,-368,-316,208,32,8],[-284,16,-312,72,96,208],[-156,16,-412,184,96,8],[20,16,-320,168,96,176],[-60,16,-500,8,96,184],[24,16,-212,176,96,8],[108,16,-224,8,96,16],[116,16,-228,8,96,8],[20,16,-224,168,96,16],[112,16,-320,16,96,176],[-48,16,-588,16,96,8],[112,16,-588,16,96,8],[-44,16,-624,8,96,64],[108,16,-624,8,96,64],[32,16,-628,144,96,56],[32,260,-404,144,72,344],[56,320,-220,368,192,24],[172,320,-416,136,192,384],[-12,320,-592,232,192,32],[-84,320,-312,88,192,160],[-84,320,-496,88,192,160],[-260,256,-284,56,64,216],[-192,256,-188,80,64,24],[-180,256,-312,104,64,160],[-140,256,-204,24,64,56],[-84,320,-404,88,192,24],[-192,256,-216,80,64,32],[-336,256,-64,32,64,224],[-8,256,608,496,64,32],[1136,-184,224,384,48,224],[1040,-184,448,192,48,224],[600,-160,968,112,128,16],[-612,320,816,8,192,144],[-448,320,748,320,192,8],[-420,320,900,392,192,24],[-284,320,816,8,192,144],[552,-232,32,16,16,256],[920,-232,344,48,16,16],[1132,-64,-120,8,64,304],[1216,-64,-276,176,64,8],[1316,-64,-120,24,64,320],[1216,-64,60,224,64,40],[-8,448,328,496,128,16],[-8,448,-72,496,128,16],[-288,448,-72,64,128,16],[416,6,336,256,52,32],[1144,6,392,16,52,240],[944,6,600,128,52,16],[960,6,8,32,52,144],[264,6,32,48,52,192],[272,-26,-144,32,12,160],[16,6,608,160,52,32],[-160,6,600,128,52,16],[-416,6,336,320,52,32],[184,6,608,112,52,32],[-336,6,104,32,52,48],[-384,6,224,128,52,128],[392,6,472,304,52,240],[-432,-26,296,288,12,16],[-512,-26,152,128,12,16],[-588,22,32,24,84,512],[568,-186,480,48,52,288],[496,-26,32,128,12,256],[688,-284,-112,512,120,32],[1016,-332,400,240,24,128],[1136,-428,224,384,168,224],[128,-216,144,32,16,32],[-312,-48,104,16,32,80],[636,-288,922,88,128,236],[712,-288,774,16,128,21],[600,-168,952,80,112,16],[1216,-304,-328,96,96,16],[32,112,-616,96,96,16],[-648,32,816,16,96,96],[-420,320,732,392,192,24],[-536,344,856,144,144,48],[-536,320,816,144,192,32],[-536,344,776,144,144,48],[-448,320,816,32,192,128],[-360,344,776,144,144,48],[-360,320,816,144,192,32],[-360,344,856,144,144,48],[-252,320,816,56,192,144],[-448,320,884,320,192,8],[-160,320,816,128,192,192],[-628,320,816,24,192,192],[-688,320,816,96,192,192],[-528,256,440,416,64,560]];
+
+// Collision boxes from AABB extraction (invisible)
+const colBoxes = [];
+const colRamps = [];
+for (const b of M) {
+  const [cx, cy, cz, w, h, d] = b;
+  if (w < 2 || h < 2 || d < 2) continue;
+  colBoxes.push({
+    x1: cx - w/2, z1: cz - d/2,
+    x2: cx + w/2, z2: cz + d/2,
+    top: cy + h/2, bottom: cy - h/2
+  });
+}
+
+// === TRIANGLE COLLISION (spatial grid, populated async from map.bin) ===
+const GRID_SZ = 128;
+const floorGrid = {};
+const wallGrid = {};
+
+// Point-in-triangle XZ plane (sign-of-cross-product method)
+function ptInTriXZ(px, pz, ax, az, bx, bz, cx, cz) {
+  const d1 = (px-bx)*(az-bz) - (ax-bx)*(pz-bz);
+  const d2 = (px-cx)*(bz-cz) - (bx-cx)*(pz-cz);
+  const d3 = (px-ax)*(cz-az) - (cx-ax)*(pz-az);
+  return !((d1<0||d2<0||d3<0) && (d1>0||d2>0||d3>0));
+}
+
+// Triangle height at (px,pz) via barycentric interpolation
+function triYAt(px, pz, t) {
+  const v0x=t.cx-t.ax, v0z=t.cz-t.az;
+  const v1x=t.bx-t.ax, v1z=t.bz-t.az;
+  const v2x=px-t.ax,   v2z=pz-t.az;
+  const d00=v0x*v0x+v0z*v0z, d01=v0x*v1x+v0z*v1z;
+  const d02=v0x*v2x+v0z*v2z, d11=v1x*v1x+v1z*v1z;
+  const d12=v1x*v2x+v1z*v2z;
+  const inv=1/(d00*d11-d01*d01);
+  if (!isFinite(inv)) return t.ay;
+  const u=(d11*d02-d01*d12)*inv;
+  const v=(d00*d12-d01*d02)*inv;
+  return t.ay + u*(t.cy-t.ay) + v*(t.by-t.ay);
+}
+
+// Closest point on triangle to 3D point (Voronoi region method)
+function closestPtTri(px,py,pz, t) {
+  const abx=t.bx-t.ax,aby=t.by-t.ay,abz=t.bz-t.az;
+  const acx=t.cx-t.ax,acy=t.cy-t.ay,acz=t.cz-t.az;
+  const apx=px-t.ax,apy=py-t.ay,apz=pz-t.az;
+  const d1=abx*apx+aby*apy+abz*apz;
+  const d2=acx*apx+acy*apy+acz*apz;
+  if(d1<=0&&d2<=0) return {x:t.ax,y:t.ay,z:t.az};
+  const bpx=px-t.bx,bpy=py-t.by,bpz=pz-t.bz;
+  const d3=abx*bpx+aby*bpy+abz*bpz;
+  const d4=acx*bpx+acy*bpy+acz*bpz;
+  if(d3>=0&&d4<=d3) return {x:t.bx,y:t.by,z:t.bz};
+  const vc=d1*d4-d3*d2;
+  if(vc<=0&&d1>=0&&d3<=0){const v=d1/(d1-d3);return{x:t.ax+abx*v,y:t.ay+aby*v,z:t.az+abz*v};}
+  const cpx=px-t.cx,cpy=py-t.cy,cpz=pz-t.cz;
+  const d5=abx*cpx+aby*cpy+abz*cpz;
+  const d6=acx*cpx+acy*cpy+acz*cpz;
+  if(d6>=0&&d5<=d6) return {x:t.cx,y:t.cy,z:t.cz};
+  const vb=d5*d2-d1*d6;
+  if(vb<=0&&d2>=0&&d6<=0){const w=d2/(d2-d6);return{x:t.ax+acx*w,y:t.ay+acy*w,z:t.az+acz*w};}
+  const va=d3*d6-d5*d4;
+  if(va<=0&&(d4-d3)>=0&&(d5-d6)>=0){const w=(d4-d3)/((d4-d3)+(d5-d6));return{x:t.bx+(t.cx-t.bx)*w,y:t.by+(t.cy-t.by)*w,z:t.bz+(t.cz-t.bz)*w};}
+  const dn=1/(va+vb+vc);const sv=vb*dn,sw=vc*dn;
+  return{x:t.ax+abx*sv+acx*sw,y:t.ay+aby*sv+acy*sw,z:t.az+abz*sv+acz*sw};
+}
+
+function addToGrid(grid, tri) {
+  const gx1=Math.floor(tri.minX/GRID_SZ), gx2=Math.floor(tri.maxX/GRID_SZ);
+  const gz1=Math.floor(tri.minZ/GRID_SZ), gz2=Math.floor(tri.maxZ/GRID_SZ);
+  for (let gx=gx1; gx<=gx2; gx++) {
+    for (let gz=gz1; gz<=gz2; gz++) {
+      const key=gx+','+gz;
+      if (!grid[key]) grid[key]=[];
+      grid[key].push(tri);
+    }
+  }
+}
+
+function getGridCell(grid, x, z) {
+  return grid[Math.floor(x/GRID_SZ)+','+Math.floor(z/GRID_SZ)] || [];
+}
+
+// Load BSP triangle mesh for rendering + collision
+fetch('assets/map.bin').then(r => r.arrayBuffer()).then(buf => {
+  const view = new DataView(buf);
+  const nv = view.getUint32(0, true);
+  const nt = view.getUint32(4, true);
+  const verts = new Int16Array(buf, 8, nv * 3);
+  const inds = new Uint16Array(buf, 8 + nv * 6, nt * 3);
+
+  const pos = new Float32Array(nv * 3);
+  for (let i = 0; i < nv * 3; i++) pos[i] = verts[i];
+
+  // === Extract ALL triangles for collision (maximum coverage) ===
+  let nFloor=0, nWall=0;
+  for (let i = 0; i < nt; i++) {
+    const i0=inds[i*3], i1=inds[i*3+1], i2=inds[i*3+2];
+    const tri = {
+      ax:pos[i0*3], ay:pos[i0*3+1], az:pos[i0*3+2],
+      bx:pos[i1*3], by:pos[i1*3+1], bz:pos[i1*3+2],
+      cx:pos[i2*3], cy:pos[i2*3+1], cz:pos[i2*3+2]
+    };
+    const e1x=tri.bx-tri.ax, e1y=tri.by-tri.ay, e1z=tri.bz-tri.az;
+    const e2x=tri.cx-tri.ax, e2y=tri.cy-tri.ay, e2z=tri.cz-tri.az;
+    let nx=e1y*e2z-e1z*e2y, ny=e1z*e2x-e1x*e2z, nz=e1x*e2y-e1y*e2x;
+    const nl=Math.sqrt(nx*nx+ny*ny+nz*nz);
+    if (nl<0.001) continue;
+    nx/=nl; ny/=nl; nz/=nl;
+    tri.nx=nx; tri.ny=ny; tri.nz=nz;
+    tri.minX=Math.min(tri.ax,tri.bx,tri.cx);
+    tri.maxX=Math.max(tri.ax,tri.bx,tri.cx);
+    tri.minY=Math.min(tri.ay,tri.by,tri.cy);
+    tri.maxY=Math.max(tri.ay,tri.by,tri.cy);
+    tri.minZ=Math.min(tri.az,tri.bz,tri.cz);
+    tri.maxZ=Math.max(tri.az,tri.bz,tri.cz);
+    if (Math.abs(ny) > 0.45) { addToGrid(floorGrid, tri); nFloor++; }
+    if (Math.abs(ny) < 0.45) { addToGrid(wallGrid, tri); nWall++; }
+  }
+  console.log('Collision: ' + nFloor + ' floors, ' + nWall + ' walls (from ' + nt + ' triangles)');
+
+  // === Dedup (gegen Z-Fighting/Flacker-Dreiecke) + Winding-Flip (für korrekte Normalen) ===
+  const dedupSet = new Set();
+  const cleanInds = [];
+  let nSkipped = 0;
+  for (let i = 0; i < nt; i++) {
+    const i0=inds[i*3], i1=inds[i*3+1], i2=inds[i*3+2];
+    const e1x=pos[i1*3]-pos[i0*3], e1y=pos[i1*3+1]-pos[i0*3+1], e1z=pos[i1*3+2]-pos[i0*3+2];
+    const e2x=pos[i2*3]-pos[i0*3], e2y=pos[i2*3+1]-pos[i0*3+1], e2z=pos[i2*3+2]-pos[i0*3+2];
+    const fnl=Math.sqrt((e1y*e2z-e1z*e2y)**2+(e1z*e2x-e1x*e2z)**2+(e1x*e2y-e1y*e2x)**2);
+    if (fnl<0.5) { nSkipped++; continue; }
+    const v = [
+      [Math.round(pos[i0*3]),Math.round(pos[i0*3+1]),Math.round(pos[i0*3+2])],
+      [Math.round(pos[i1*3]),Math.round(pos[i1*3+1]),Math.round(pos[i1*3+2])],
+      [Math.round(pos[i2*3]),Math.round(pos[i2*3+1]),Math.round(pos[i2*3+2])]
+    ].sort((a,b) => a[0]-b[0]||a[1]-b[1]||a[2]-b[2]);
+    const k = v[0][0]+','+v[0][1]+','+v[0][2]+'/'+v[1][0]+','+v[1][1]+','+v[1][2]+'/'+v[2][0]+','+v[2][1]+','+v[2][2];
+    if (dedupSet.has(k)) { nSkipped++; continue; }
+    dedupSet.add(k);
+    cleanInds.push(i0, i2, i1); // Flip CW→CCW für korrekte Außen-Normalen
+  }
+  console.log('Dedup: ' + nSkipped + ' entfernt, ' + (cleanInds.length/3) + ' behalten');
+
+  // Non-indexed → jedes Dreieck eigene Normalen (kein Color-Bleeding)
+  const iGeo = new THREE.BufferGeometry();
+  iGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  iGeo.setIndex(new THREE.BufferAttribute(new Uint16Array(cleanInds), 1));
+  const flatGeo = iGeo.toNonIndexed();
+  flatGeo.computeVertexNormals();
+
+  // Vertex-Colors: Zoe-Palette (Flip → ny>0 = Boden, ny<0 = Decke)
+  const fPos = flatGeo.getAttribute('position');
+  const fNorm = flatGeo.getAttribute('normal');
+  const nv2 = fPos.count;
+  const colors = new Float32Array(nv2 * 3);
+  for (let i = 0; i < nv2; i++) {
+    const vny = fNorm.getY(i);
+    const y = fPos.getY(i);
+    const hf = Math.max(0, Math.min(1, (y + 500) / 1000));
+    let r, g, b;
+    if (vny > 0.5) {
+      // Böden: helles Cream-Blau (#f0ece6 Richtung)
+      r = 0.60 + hf*0.34; g = 0.65 + hf*0.28; b = 0.72 + hf*0.18;
+    } else if (vny < -0.5) {
+      // Decken: dunkles Navy (#0a1628 Richtung)
+      r = 0.04 + hf*0.04; g = 0.08 + hf*0.04; b = 0.15 + hf*0.04;
+    } else {
+      // Wände: Cool-Blue (#1a3a5c → #3a6080), heller für Sichtbarkeit
+      const wx = Math.abs(fNorm.getX(i));
+      const wz = Math.abs(fNorm.getZ(i));
+      const var2 = wx > wz ? 0.08 : 0.0;
+      r = 0.18 + hf*0.12 + var2; g = 0.30 + hf*0.14 + var2*0.5; b = 0.46 + hf*0.12;
+    }
+    colors[i*3]=r; colors[i*3+1]=g; colors[i*3+2]=b;
+  }
+  flatGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const mapMat = new THREE.MeshLambertMaterial({
+    vertexColors: true, side: THREE.FrontSide,
+    polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4
+  });
+  scene.add(new THREE.Mesh(flatGeo, mapMat));
+  console.log('Map loaded: ' + nv + ' verts, ' + nt + ' tris → ' + nv2 + ' flat verts');
+});
+
+// === TELEPORTERS (generous triggers — walk-through doorways) ===
+let teleCD = 0;
+const teleporters = [
+  { // sgtele: lower area → mid
+    x1:530, x2:670, y1:-250, y2:-20, z1:920, z2:985,
+    dx:1088, dy:-8+CFG.playerHeight, dz:416, yaw:Math.PI/2 },
+  { // uppertele: RA pit → upper
+    x1:1140, x2:1290, y1:-440, y2:-220, z1:-360, z2:-295,
+    dx:32, dy:88+CFG.playerHeight, dz:-544, yaw:Math.PI },
+  { // ra: upper → RA pit
+    x1:-45, x2:110, y1:-20, y2:240, z1:-650, z2:-585,
+    dx:944, dy:-328+CFG.playerHeight, dz:8, yaw:3*Math.PI/2 },
+  { // mh: side → lower
+    x1:-680, x2:-615, y1:-90, y2:160, z1:740, z2:890,
+    dx:-176, dy:-200+CFG.playerHeight, dz:208, yaw:Math.PI }
+];
+
+// Teleporter visuals — show trigger zone as glowing box
+for (const tp of teleporters) {
+  const cx = (tp.x1+tp.x2)/2, cy = (tp.y1+tp.y2)/2, cz = (tp.z1+tp.z2)/2;
+  const tw = tp.x2-tp.x1, th = tp.y2-tp.y1, td = tp.z2-tp.z1;
+  const pad = new THREE.Mesh(
+    new THREE.BoxGeometry(tw, th, td),
+    new THREE.MeshBasicMaterial({ color: 0x2abfbf, transparent: true, opacity: 0.25, side: THREE.DoubleSide })
+  );
+  pad.position.set(cx, cy, cz);
+  scene.add(pad);
+  // Wireframe outline
+  const wireBox = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(tw, th, td)),
+    new THREE.LineBasicMaterial({ color: 0x2abfbf })
+  );
+  wireBox.position.copy(pad.position);
+  scene.add(wireBox);
+  const glow = new THREE.PointLight(0x2abfbf, 1.5, 150);
+  glow.position.set(cx, cy + 20, cz);
+  scene.add(glow);
+}
+
+// === JUMP PADS (from BSP entities) ===
+let jpCD = 0;
+const jumpPads = [
+  { // t125: lower → mid
+    x1:-16, x2:112, y1:-230, y2:-210, z1:464, z2:592,
+    vx:94, vy:683, vz:0 },
+  { // t126: lower → upper
+    x1:-576, x2:-480, y1:-230, y2:-210, z1:160, z2:288,
+    vx:0, vy:780, vz:0 }
+];
+
+// Jump pad visuals
+for (const jp of jumpPads) {
+  const cx = (jp.x1+jp.x2)/2, cz = (jp.z1+jp.z2)/2;
+  const pad = new THREE.Mesh(
+    new THREE.BoxGeometry((jp.x2-jp.x1)*0.7, 4, (jp.z2-jp.z1)*0.7),
+    new THREE.MeshBasicMaterial({ color: 0xf4a842, transparent: true, opacity: 0.7 })
+  );
+  pad.position.set(cx, (jp.y1+jp.y2)/2, cz);
+  scene.add(pad);
+  // Upward arrow light
+  const glow = new THREE.PointLight(0xf4a842, 1.2, 150);
+  glow.position.set(cx, jp.y2 + 40, cz);
+  scene.add(glow);
+}
+
+// === WALL POSTERS ===
+const posterTex1 = new THREE.TextureLoader().load('assets/poster.jpg');
+posterTex1.minFilter = THREE.LinearFilter;
+const posterMat1 = new THREE.MeshBasicMaterial({ map: posterTex1, side: THREE.DoubleSide });
+const posterTex2 = new THREE.TextureLoader().load('assets/poster2.jpg');
+posterTex2.minFilter = THREE.LinearFilter;
+const posterMat2 = new THREE.MeshBasicMaterial({ map: posterTex2, side: THREE.DoubleSide });
+// 4 large posters at eye-level (floor+50) near spawn points, 8+ units from walls
+const posterSpots = [
+  // poster1 — RA area near Spawn 2 (floor=88), south side of RA tele entrance
+  { x:30, y:138, z:-575, ry:0, w:110, h:150, mat: posterMat1 },
+  // poster1 — Upper area near Spawn 0 (floor=8)
+  { x:290, y:58, z:-152, ry:Math.PI/2, w:110, h:150, mat: posterMat1 },
+  // poster2 — Mid area near Spawn 1 (floor=-8)
+  { x:1000, y:42, z:496, ry:-Math.PI/2, w:100, h:135, mat: posterMat2 },
+  // poster2 — Lower area near jumppad (floor=-200)
+  { x:48, y:-150, z:420, ry:0, w:100, h:135, mat: posterMat2 },
+];
+for (const p of posterSpots) {
+  const geo = new THREE.PlaneGeometry(p.w, p.h);
+  const mesh = new THREE.Mesh(geo, p.mat);
+  mesh.position.set(p.x, p.y, p.z);
+  mesh.rotation.y = p.ry;
+  mesh.renderOrder = 2;
+  scene.add(mesh);
+}
+
+// Ground plane far below — visual catch
+const groundGeo = new THREE.PlaneGeometry(6000, 6000);
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x0a1628 });
+const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.position.y = -800;
+scene.add(groundMesh);
+
+// === PLAYER STATE ===
+// Spawn points from BSP (Q3→Three.js converted)
+const SPAWNS = [
+  { x:352, y:8+CFG.playerHeight, z:-152 },
+  { x:944, y:-8+CFG.playerHeight, z:496 },
+  { x:80, y:88+CFG.playerHeight, z:-272 },
+  { x:-120, y:88+CFG.playerHeight, z:824 },
+  { x:64, y:-200+CFG.playerHeight, z:352 },
+  { x:720, y:-200+CFG.playerHeight, z:904 },
+  { x:920, y:-200+CFG.playerHeight, z:552 },
+  { x:1216, y:-328+CFG.playerHeight, z:-256 },
+];
+const SPAWN = SPAWNS[0];
+const player = {
+  x: SPAWN.x, y: SPAWN.y, z: SPAWN.z,
+  vx: 0, vy: 0, vz: 0,
+  yaw: Math.PI, pitch: 0,
+  onGround: true,
+  hp: 100,
+  weapon: 'rocket'
+};
+
+// === PHYSICS ===
+function getWishDir() {
+  const forward = { x: -Math.sin(player.yaw), z: -Math.cos(player.yaw) };
+  const right   = { x: Math.cos(player.yaw),  z: -Math.sin(player.yaw) };
+  let wx = 0, wz = 0;
+  if (keys.w) { wx += forward.x; wz += forward.z; }
+  if (keys.s) { wx -= forward.x; wz -= forward.z; }
+  if (keys.a) { wx -= right.x;   wz -= right.z; }
+  if (keys.d) { wx += right.x;   wz += right.z; }
+  const len = Math.sqrt(wx*wx + wz*wz);
+  if (len > 0.001) { wx /= len; wz /= len; }
+  return { x: wx, z: wz, hasInput: len > 0.001 };
+}
+
+function applyFriction(dt) {
+  const speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+  if (speed < 0.1) return;
+  const control = speed < CFG.sv_stopspeed ? CFG.sv_stopspeed : speed;
+  const drop = control * CFG.sv_friction * dt;
+  let ns = speed - drop; if (ns < 0) ns = 0;
+  const s = ns / speed;
+  player.vx *= s; player.vz *= s;
+}
+
+function accelerate(wishdir, wishspeed, accel, dt) {
+  const cs = player.vx * wishdir.x + player.vz * wishdir.z;
+  const add = wishspeed - cs;
+  if (add <= 0) return;
+  let as2 = accel * wishspeed * dt;
+  if (as2 > add) as2 = add;
+  player.vx += as2 * wishdir.x;
+  player.vz += as2 * wishdir.z;
+}
+
+function airControl(wishdir, dt) {
+  // CPMA PM_Aircontrol: only with forward input, dot²-modulated turning
+  if (!keys.w || !wishdir.hasInput) return;
+  const speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+  if (speed < 1) return;
+  // Normalized velocity direction
+  const vx = player.vx / speed, vz = player.vz / speed;
+  // Dot product: how aligned is velocity with wish direction
+  const dot = vx * wishdir.x + vz * wishdir.z;
+  if (dot <= 0) return; // only when moving toward wish dir
+  // k = 32 * cpm_aircontrol * dot² * dt (original CPMA formula)
+  const k = 32 * CFG.cpm_aircontrol * dot * dot * dt;
+  // Add wish direction, renormalize, scale back to speed
+  let nvx = player.vx + wishdir.x * k;
+  let nvz = player.vz + wishdir.z * k;
+  const nl = Math.sqrt(nvx*nvx + nvz*nvz);
+  if (nl > 0.001) {
+    player.vx = (nvx / nl) * speed;
+    player.vz = (nvz / nl) * speed;
+  }
+}
+
+function groundMove(wishdir, dt) {
+  applyFriction(dt);
+  const maxspd = keys.shift ? 120 : CFG.sv_maxspeed;
+  if (wishdir.hasInput) accelerate(wishdir, maxspd, CFG.sv_accelerate, dt);
+}
+
+function airMove(wishdir, dt) {
+  if (wishdir.hasInput) {
+    airControl(wishdir, dt);
+    let ws = CFG.sv_maxspeed, ac;
+    const cs = player.vx * wishdir.x + player.vz * wishdir.z;
+    if (!keys.w && !keys.s && (keys.a || keys.d)) {
+      ws = Math.min(ws, CFG.cpm_wishspeed);
+      ac = CFG.cpm_strafeaccelerate;
+    } else if (cs < 0) {
+      ac = CFG.cpm_airstopaccelerate;
+    } else {
+      ac = CFG.sv_airaccelerate;
+    }
+    accelerate(wishdir, ws, ac, dt);
+  }
+  player.vy -= CFG.sv_gravity * dt;
+}
+
+function doJump() {
+  if (keys.space && player.onGround) {
+    player.vy = CFG.sv_jumpvelocity;
+    player.onGround = false;
+    playSound('jump', 0.5);
+  }
+}
+
+// === COLLISION ===
+function getRampHeight(r, x, z) {
+  let t;
+  if (r.axis === 'z+') t = (z - r.z1) / (r.z2 - r.z1);
+  else if (r.axis === 'z-') t = 1 - (z - r.z1) / (r.z2 - r.z1);
+  else if (r.axis === 'x+') t = (x - r.x1) / (r.x2 - r.x1);
+  else t = 1 - (x - r.x1) / (r.x2 - r.x1);
+  return r.y1 + (r.y2 - r.y1) * Math.max(0, Math.min(1, t));
+}
+
+function getFloorAt(x, feetY, z) {
+  let best = -9999;
+  for (const b of colBoxes) {
+    if (x >= b.x1 && x <= b.x2 && z >= b.z1 && z <= b.z2) {
+      if (b.top <= feetY + CFG.stepUp) best = Math.max(best, b.top);
+    }
+  }
+  for (const r of colRamps) {
+    if (x >= r.x1 && x <= r.x2 && z >= r.z1 && z <= r.z2) {
+      const ry = getRampHeight(r, x, z);
+      if (ry <= feetY + CFG.stepUp) best = Math.max(best, ry);
+    }
+  }
+  const gx = Math.floor(x / GRID_SZ), gz = Math.floor(z / GRID_SZ);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      const cell = floorGrid[(gx+dx)+','+(gz+dz)];
+      if (!cell) continue;
+      for (const t of cell) {
+        if (x < t.minX || x > t.maxX || z < t.minZ || z > t.maxZ) continue;
+        if (!ptInTriXZ(x, z, t.ax, t.az, t.bx, t.bz, t.cx, t.cz)) continue;
+        const ty = triYAt(x, z, t);
+        if (ty <= feetY + CFG.stepUp) best = Math.max(best, ty);
+      }
+    }
+  }
+  return best;
+}
+function getFloorHeight(x, z) { return getFloorAt(x, player.y - CFG.playerHeight, z); }
+
+function isInsideSolid(x, y, z) {
+  for (const b of colBoxes) {
+    if (x >= b.x1 && x <= b.x2 && z >= b.z1 && z <= b.z2 &&
+        y >= b.bottom && y <= b.top) return true;
+  }
+  // Check wall triangles — rocket hits wall if very close to a triangle face
+  const gx = Math.floor(x / GRID_SZ), gz = Math.floor(z / GRID_SZ);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      const cell = wallGrid[(gx+dx)+','+(gz+dz)];
+      if (!cell) continue;
+      for (const t of cell) {
+        if (y < t.minY || y > t.maxY) continue;
+        if (x < t.minX-4 || x > t.maxX+4 || z < t.minZ-4 || z > t.maxZ+4) continue;
+        const cp = closestPtTri(x, y, z, t);
+        const dd = (x-cp.x)*(x-cp.x)+(y-cp.y)*(y-cp.y)+(z-cp.z)*(z-cp.z);
+        if (dd < 16) return true; // within 4 units of surface
+      }
+    }
+  }
+  return false;
+}
+
+function collideWalls() {
+  const r = CFG.playerRadius;
+  const feet = player.y - CFG.playerHeight;
+  const bodyY = feet + CFG.playerHeight * 0.5;
+
+  // AABB Box-Seitenkollision
+  for (const b of colBoxes) {
+    if (feet >= b.top - CFG.stepUp) continue;
+    if (player.y <= b.bottom) continue;
+    const cx = Math.max(b.x1, Math.min(player.x, b.x2));
+    const cz = Math.max(b.z1, Math.min(player.z, b.z2));
+    const dx = player.x - cx, dz = player.z - cz;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+    if (dist < r && dist > 0.001) {
+      const push = r - dist;
+      player.x += (dx/dist) * push;
+      player.z += (dz/dist) * push;
+      const nx = dx/dist, nz = dz/dist;
+      const vd = player.vx*nx + player.vz*nz;
+      if (vd < 0) { player.vx -= vd*nx; player.vz -= vd*nz; }
+    }
+  }
+
+  // BSP wall triangles (spatial grid + closest-point)
+  const gx = Math.floor(player.x / GRID_SZ), gz = Math.floor(player.z / GRID_SZ);
+  for (let dgx = -1; dgx <= 1; dgx++) {
+    for (let dgz = -1; dgz <= 1; dgz++) {
+      const cell = wallGrid[(gx+dgx)+','+(gz+dgz)];
+      if (!cell) continue;
+      for (const t of cell) {
+        // Quick Y overlap check — skip if player not overlapping triangle height
+        if (feet > t.maxY || player.y < t.minY) continue;
+        // Quick XZ bounds check
+        if (player.x + r < t.minX || player.x - r > t.maxX) continue;
+        if (player.z + r < t.minZ || player.z - r > t.maxZ) continue;
+
+        // Closest point on triangle to player body center
+        const cp = closestPtTri(player.x, bodyY, player.z, t);
+
+        // Skip if closest point is at foot level (handled by floor collision / step-up)
+        if (cp.y <= feet + CFG.stepUp && cp.y >= feet - 4) continue;
+        // Only react if closest point is in player's Y range
+        if (cp.y < feet - 4 || cp.y > player.y) continue;
+
+        // Horizontal distance only (walls push XZ, not Y)
+        const cdx = player.x - cp.x, cdz = player.z - cp.z;
+        const hdist = Math.sqrt(cdx*cdx + cdz*cdz);
+
+        if (hdist < r && hdist > 0.01) {
+          const push = r - hdist;
+          player.x += (cdx/hdist) * push;
+          player.z += (cdz/hdist) * push;
+          const nx = cdx/hdist, nz = cdz/hdist;
+          const vd = player.vx*nx + player.vz*nz;
+          if (vd < 0) { player.vx -= vd*nx; player.vz -= vd*nz; }
+        }
+      }
+    }
+  }
+}
+
+// === ROCKETS ===
+const rockets = [];
+const explosions = [];
+let lastFireTime = 0;
+const rocketGeo = new THREE.SphereGeometry(4, 6, 6);
+const rocketMat = new THREE.MeshBasicMaterial({ color: 0xf4a842 });
+const exploGeo = new THREE.SphereGeometry(1, 10, 10);
+
+function getCamForward() {
+  const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
+  const cy = Math.cos(player.yaw), sy = Math.sin(player.yaw);
+  return { x: -sy * cp, y: sp, z: -cy * cp };
+}
+
+function fireRocket(time) {
+  if (time - lastFireTime < CFG.rk_fireRate) return;
+  lastFireTime = time;
+  playSound('rocketFire', 0.6);
+  const dir = getCamForward();
+  const mesh = new THREE.Mesh(rocketGeo, rocketMat);
+  const light = new THREE.PointLight(0xf4a842, 0.6, 100);
+  const startX = player.x;
+  const startY = player.y - CFG.playerHeight + CFG.eyeHeight;
+  const startZ = player.z;
+  mesh.position.set(startX, startY, startZ);
+  light.position.set(startX, startY, startZ);
+  scene.add(mesh); scene.add(light);
+  rockets.push({
+    x: startX, y: startY, z: startZ,
+    vx: dir.x * CFG.rk_speed, vy: dir.y * CFG.rk_speed, vz: dir.z * CFG.rk_speed,
+    mesh, light, life: 4.0, owner: 'player'
+  });
+}
+
+function rocketExplode(r) {
+  playSound('rocketExplode', 0.7);
+  // Explosion visual
+  const mat = new THREE.MeshBasicMaterial({ color: 0xf4a842, transparent: true, opacity: 0.8 });
+  const mesh = new THREE.Mesh(exploGeo, mat);
+  mesh.position.set(r.x, r.y, r.z);
+  const light = new THREE.PointLight(0xf4a842, 2.0, 200);
+  light.position.set(r.x, r.y, r.z);
+  scene.add(mesh); scene.add(light);
+  explosions.push({ mesh, mat, light, life: 0.3, maxLife: 0.3 });
+
+  // Knockback auf Spieler
+  const centerY = player.y - CFG.playerHeight/2;
+  const dx = player.x - r.x, dy = centerY - r.y, dz = player.z - r.z;
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  if (dist < CFG.rk_radius && dist > 0.01) {
+    const kb = r.owner === 'bot' ? CFG.rk_knockback * 0.7 : CFG.rk_knockback * CFG.rk_selfKB;
+    const force = kb * (1 - dist / CFG.rk_radius);
+    player.vx += (dx/dist) * force;
+    player.vy += (dy/dist) * force;
+    player.vz += (dz/dist) * force;
+    player.onGround = false;
+    // Damage from bot rockets
+    if (r.owner === 'bot') {
+      const dmg = 80 * (1 - dist / CFG.rk_radius);
+      player.hp -= dmg;
+      dmgFlashTime = 0.25;
+      playSound('hit', 0.5);
+    }
+  }
+
+  // Bot-Schaden (nur von Spieler-Rockets) — check ALL bots
+  if (r.owner === 'player') {
+    for (const b of bots) {
+      if (!b.alive) continue;
+      const spheres = getHitSpheres(b.x, b.y, b.z);
+      let bestDist = Infinity, bestMul = 1;
+      for (const s of spheres) {
+        const sdx = s.cx-r.x, sdy = s.cy-r.y, sdz = s.cz-r.z;
+        const sd = Math.sqrt(sdx*sdx+sdy*sdy+sdz*sdz) - s.r;
+        if (sd < bestDist) { bestDist = sd; bestMul = s.mul; }
+      }
+      if (bestDist < CFG.rk_radius) {
+        const dmg = 100 * bestMul * (1 - Math.max(0,bestDist) / CFG.rk_radius);
+        b.hp -= dmg;
+        b.hitFlash = 0.15;
+        playSound('hit', 0.7);
+        const bcx = b.x-r.x, bcy = (b.y-CFG.playerHeight/2)-r.y, bcz = b.z-r.z;
+        const bdist = Math.sqrt(bcx*bcx+bcy*bcy+bcz*bcz);
+        if (bdist > 0.01) {
+          const bforce = CFG.rk_knockback * 0.8 * (1 - Math.max(0,bestDist) / CFG.rk_radius);
+          b.vx += (bcx/bdist) * bforce;
+          b.vy += (bcy/bdist) * bforce;
+          b.vz += (bcz/bdist) * bforce;
+        }
+        if (b.hp <= 0) killBot(b);
+      }
+    }
+  }
+
+  // Cleanup rocket visuals
+  scene.remove(r.mesh); scene.remove(r.light);
+}
+
+function updateRockets(dt) {
+  for (let i = rockets.length - 1; i >= 0; i--) {
+    const r = rockets[i];
+    r.x += r.vx * dt; r.y += r.vy * dt; r.z += r.vz * dt;
+    r.life -= dt;
+    r.mesh.position.set(r.x, r.y, r.z);
+    r.light.position.set(r.x, r.y, r.z);
+
+    if (isInsideSolid(r.x, r.y, r.z) || r.life <= 0) {
+      rocketExplode(r);
+      rockets.splice(i, 1);
+    }
+  }
+
+  // Explosions animieren
+  for (let i = explosions.length - 1; i >= 0; i--) {
+    const e = explosions[i];
+    e.life -= dt;
+    const t = 1 - e.life / e.maxLife;
+    const s = 5 + t * 60;
+    e.mesh.scale.set(s, s, s);
+    e.mat.opacity = 0.8 * (1 - t);
+    e.light.intensity = 2.0 * (1 - t);
+    if (e.life <= 0) {
+      scene.remove(e.mesh); scene.remove(e.light);
+      explosions.splice(i, 1);
+    }
+  }
+}
+
+// === HITBOX SPHERES (3 stacked: head, body, legs) ===
+// Returns array of {cx, cy, cz, r, mul} for hit detection
+// head: small sphere top, 1.5x dmg; body: large middle, 1.0x; legs: medium bottom, 0.75x
+function getHitSpheres(x, y, z) {
+  const feet = y - CFG.playerHeight;
+  return [
+    { cx:x, cy:feet+48, cz:z, r:8,  mul:1.5,  name:'head' },
+    { cx:x, cy:feet+28, cz:z, r:13, mul:1.0,  name:'body' },
+    { cx:x, cy:feet+10, cz:z, r:10, mul:0.75, name:'legs' }
+  ];
+}
+
+// Ray-sphere intersection, returns {t, sphere} or null
+function raySphereHit(ox,oy,oz, dx,dy,dz, spheres) {
+  let bestT = Infinity, bestS = null;
+  for (const s of spheres) {
+    const ocx=ox-s.cx, ocy=oy-s.cy, ocz=oz-s.cz;
+    const b = 2*(dx*ocx + dy*ocy + dz*ocz);
+    const c = ocx*ocx + ocy*ocy + ocz*ocz - s.r*s.r;
+    const disc = b*b - 4*c;
+    if (disc < 0) continue;
+    const t = (-b - Math.sqrt(disc)) / 2;
+    if (t > 0 && t < bestT) { bestT = t; bestS = s; }
+  }
+  return bestS ? { t: bestT, sphere: bestS } : null;
+}
+
+// === RAILGUN (Instagib) ===
+const beams = [];
+let lastRailTime = 0;
+
+// Rail sound — original Q3 railgf1a.wav
+function playRailSound(vol) { playSound('railFire', vol || 0.8); }
+
+// Ray-AABB intersection, returns t >= 0 or -1
+function rayAABB(ox,oy,oz, dx,dy,dz, x1,y1,z1, x2,y2,z2) {
+  let tmin=0, tmax=10000;
+  if (Math.abs(dx)<0.0001) { if (ox<x1||ox>x2) return -1; }
+  else { let t1=(x1-ox)/dx,t2=(x2-ox)/dx; if(t1>t2){const tmp=t1;t1=t2;t2=tmp;} tmin=Math.max(tmin,t1);tmax=Math.min(tmax,t2); if(tmin>tmax) return -1; }
+  if (Math.abs(dy)<0.0001) { if (oy<y1||oy>y2) return -1; }
+  else { let t1=(y1-oy)/dy,t2=(y2-oy)/dy; if(t1>t2){const tmp=t1;t1=t2;t2=tmp;} tmin=Math.max(tmin,t1);tmax=Math.min(tmax,t2); if(tmin>tmax) return -1; }
+  if (Math.abs(dz)<0.0001) { if (oz<z1||oz>z2) return -1; }
+  else { let t1=(z1-oz)/dz,t2=(z2-oz)/dz; if(t1>t2){const tmp=t1;t1=t2;t2=tmp;} tmin=Math.max(tmin,t1);tmax=Math.min(tmax,t2); if(tmin>tmax) return -1; }
+  return tmin;
+}
+
+// World trace — returns distance to first solid along ray
+function worldTrace(ox,oy,oz, dx,dy,dz, maxDist) {
+  const step = 10;
+  for (let d = step; d <= maxDist; d += step) {
+    if (isInsideSolid(ox+dx*d, oy+dy*d, oz+dz*d)) return d - step*0.5;
+  }
+  return maxDist;
+}
+
+function createBeam(x1,y1,z1, x2,y2,z2, color) {
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(x1,y1,z1), new THREE.Vector3(x2,y2,z2)
+  ]);
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1.0 });
+  const line = new THREE.Line(geo, mat);
+  scene.add(line);
+  // Impact flash
+  const fmat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(10, 8, 8), fmat);
+  flash.position.set(x2, y2, z2);
+  scene.add(flash);
+  beams.push({ line, mat, flash, fmat, life: 0.5, maxLife: 0.5 });
+}
+
+function updateBeams(dt) {
+  for (let i = beams.length-1; i >= 0; i--) {
+    const b = beams[i];
+    b.life -= dt;
+    const t = Math.max(0, b.life / b.maxLife);
+    b.mat.opacity = t;
+    b.fmat.opacity = t * 0.9;
+    const s = 1 + (1-t) * 4;
+    b.flash.scale.set(s, s, s);
+    if (b.life <= 0) {
+      scene.remove(b.line); scene.remove(b.flash);
+      beams.splice(i, 1);
+    }
+  }
+}
+
+function fireRail(time) {
+  if (time - lastRailTime < 1.5) return;
+  lastRailTime = time;
+  const dir = getCamForward();
+  const ex = player.x, ey = player.y - CFG.playerHeight + CFG.eyeHeight, ez = player.z;
+
+  // Check ALL bots for hit (closest wins)
+  let hitDist = 4000, hitSphere = null, hitBot = null;
+  for (const b of bots) {
+    if (!b.alive) continue;
+    const spheres = getHitSpheres(b.x, b.y, b.z);
+    const hit = raySphereHit(ex,ey,ez, dir.x,dir.y,dir.z, spheres);
+    if (hit && hit.t < hitDist) { hitDist = hit.t; hitSphere = hit.sphere; hitBot = b; }
+  }
+  const wd = worldTrace(ex,ey,ez, dir.x,dir.y,dir.z, hitDist);
+  if (wd < hitDist) { hitDist = wd; hitSphere = null; hitBot = null; }
+
+  const hx = ex+dir.x*hitDist, hy = ey+dir.y*hitDist, hz = ez+dir.z*hitDist;
+  createBeam(ex, ey, ez, hx, hy, hz, 0x2abfbf);
+  playRailSound(0.8);
+
+  if (hitSphere && hitBot) {
+    if (settings.mode === 'instagib') {
+      hitBot.hp = 0;
+    } else {
+      hitBot.hp -= 80 * hitSphere.mul;
+    }
+    hitBot.hitFlash = 0.3;
+    playSound('hit', 1.0);
+    if (hitBot.hp <= 0) killBot(hitBot);
+  }
+}
+
+function botFireRail(b) {
+  const ex = b.x, ey = b.y - CFG.playerHeight + CFG.eyeHeight, ez = b.z;
+  const px = player.x, py = player.y - CFG.playerHeight + CFG.eyeHeight, pz = player.z;
+  const ddx = px-ex, ddy = py-ey, ddz = pz-ez;
+  const pd = Math.sqrt(ddx*ddx+ddy*ddy+ddz*ddz);
+  if (pd < 1) return;
+  const dx = ddx/pd, dy = ddy/pd, dz = ddz/pd;
+
+  // Check player hit (3-sphere hitbox)
+  const spheres = getHitSpheres(player.x, player.y, player.z);
+  const hit = raySphereHit(ex,ey,ez, dx,dy,dz, spheres);
+  const wd = worldTrace(ex,ey,ez, dx,dy,dz, pd + 200);
+
+  let hitDist, hitSphere = null;
+  if (hit && hit.t < wd) { hitDist = hit.t; hitSphere = hit.sphere; }
+  else { hitDist = Math.min(wd, pd + 200); }
+
+  const hx = ex+dx*hitDist, hy = ey+dy*hitDist, hz = ez+dz*hitDist;
+  createBeam(ex, ey, ez, hx, hy, hz, 0xe86a7a);
+  playRailSound(0.5);
+
+  if (hitSphere) {
+    if (settings.mode === 'instagib') {
+      player.hp = 0;
+    } else {
+      player.hp -= 80 * hitSphere.mul;
+    }
+    dmgFlashTime = 0.5;
+    playSound('hit', 0.8);
+  }
+}
+
+// === BOTS (multi-bot system) ===
+let playerFrags = 0, botFrags = 0;
+
+// Shared geometries (reused across all bots for performance)
+const botHeadGeo = new THREE.SphereGeometry(8, 12, 8);
+const botBodyGeo = new THREE.SphereGeometry(13, 14, 10);
+const botLegsGeo = new THREE.SphereGeometry(10, 12, 8);
+const botHPGeo = new THREE.PlaneGeometry(32, 3);
+const botHeadEdgeGeo = new THREE.EdgesGeometry(botHeadGeo);
+const botBodyEdgeGeo = new THREE.EdgesGeometry(botBodyGeo);
+const botLegsEdgeGeo = new THREE.EdgesGeometry(botLegsGeo);
+
+function createBotVisual() {
+  const fillMat = new THREE.MeshBasicMaterial({ color: 0xff2050, transparent: true, opacity: 0.65 });
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0xff80a0 });
+  const hpMat = new THREE.MeshBasicMaterial({ color: 0x2abfbf, side: THREE.DoubleSide });
+  const group = new THREE.Group();
+  const h = new THREE.Mesh(botHeadGeo, fillMat); h.position.y = 20; group.add(h);
+  const he = new THREE.LineSegments(botHeadEdgeGeo, edgeMat); he.position.y = 20; group.add(he);
+  group.add(new THREE.Mesh(botBodyGeo, fillMat));
+  group.add(new THREE.LineSegments(botBodyEdgeGeo, edgeMat));
+  const l = new THREE.Mesh(botLegsGeo, fillMat); l.position.y = -18; group.add(l);
+  const le = new THREE.LineSegments(botLegsEdgeGeo, edgeMat); le.position.y = -18; group.add(le);
+  const hp = new THREE.Mesh(botHPGeo, hpMat); hp.position.y = 34; group.add(hp);
+  scene.add(group);
+  return { group, fillMat, edgeMat, hpMat, hpMesh: hp };
+}
+
+const bots = [];
+
+function createBot() {
+  const vis = createBotVisual();
+  return {
+    x:0, y:0, z:0, vx:0, vy:0, vz:0, yaw:0,
+    onGround:false, hp:80, alive:true, target:null,
+    fireCD: 2 + Math.random()*2, respawnCD:0, seesPlayer:false,
+    hitFlash: 0, stuckTime: 0, lastX: 0, lastZ: 0, vis
+  };
+}
+
+function initBots() {
+  for (const b of bots) scene.remove(b.vis.group);
+  bots.length = 0;
+  for (let i = 0; i < settings.botCount; i++) {
+    const b = createBot();
+    spawnBot(b);
+    bots.push(b);
+  }
+}
+
+// === GIB ANIMATION (bot death) ===
+const gibs = [];
+const gibGeos = [
+  new THREE.SphereGeometry(8, 8, 6),   // head
+  new THREE.SphereGeometry(13, 10, 8),  // body
+  new THREE.SphereGeometry(10, 8, 6)    // legs
+];
+
+function spawnGibs(x, y, z) {
+  const offsets = [20, 0, -18]; // y-offsets from group center
+  for (let i = 0; i < 3; i++) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xe86a7a, transparent: true, opacity: 0.7 });
+    const mesh = new THREE.Mesh(gibGeos[i], mat);
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0xf4a842, transparent: true, opacity: 1.0 });
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(gibGeos[i]), edgeMat);
+    mesh.position.set(x, y - CFG.playerHeight*0.5 + offsets[i], z);
+    edges.position.copy(mesh.position);
+    scene.add(mesh); scene.add(edges);
+    // Random outward velocity
+    const ang = Math.random() * Math.PI * 2;
+    const upBias = i === 0 ? 250 : i === 2 ? -50 : 100;
+    gibs.push({
+      mesh, mat, edges, edgeMat,
+      x: mesh.position.x, y: mesh.position.y, z: mesh.position.z,
+      vx: Math.cos(ang) * (120 + Math.random()*150),
+      vy: upBias + Math.random()*200,
+      vz: Math.sin(ang) * (120 + Math.random()*150),
+      rx: (Math.random()-0.5)*10, rz: (Math.random()-0.5)*10,
+      life: 1.5, maxLife: 1.5
+    });
+  }
+  // Big flash
+  const flashMat = new THREE.MeshBasicMaterial({ color: 0xf4a842, transparent: true, opacity: 0.9 });
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(30, 10, 10), flashMat);
+  flash.position.set(x, y - CFG.playerHeight*0.5, z);
+  scene.add(flash);
+  const flashLight = new THREE.PointLight(0xf4a842, 3, 300);
+  flashLight.position.copy(flash.position);
+  scene.add(flashLight);
+  gibs.push({
+    mesh: flash, mat: flashMat, edges: null, edgeMat: null,
+    x: flash.position.x, y: flash.position.y, z: flash.position.z,
+    vx:0, vy:0, vz:0, rx:0, rz:0,
+    life: 0.4, maxLife: 0.4, light: flashLight, isFlash: true
+  });
+}
+
+function updateGibs(dt) {
+  for (let i = gibs.length-1; i >= 0; i--) {
+    const g = gibs[i];
+    g.life -= dt;
+    const t = Math.max(0, g.life / g.maxLife);
+    if (g.isFlash) {
+      const s = 1 + (1-t)*3;
+      g.mesh.scale.set(s, s, s);
+      g.mat.opacity = t * 0.9;
+      if (g.light) g.light.intensity = 3 * t;
+    } else {
+      g.vy -= 500 * dt; // gravity on gibs
+      g.x += g.vx * dt; g.y += g.vy * dt; g.z += g.vz * dt;
+      g.mesh.position.set(g.x, g.y, g.z);
+      g.mesh.rotation.x += g.rx * dt;
+      g.mesh.rotation.z += g.rz * dt;
+      if (g.edges) {
+        g.edges.position.copy(g.mesh.position);
+        g.edges.rotation.copy(g.mesh.rotation);
+        g.edgeMat.opacity = t;
+      }
+      g.mat.opacity = t * 0.7;
+      const s = 0.3 + t * 0.7;
+      g.mesh.scale.set(s, s, s);
+    }
+    if (g.life <= 0) {
+      scene.remove(g.mesh);
+      if (g.edges) scene.remove(g.edges);
+      if (g.light) scene.remove(g.light);
+      gibs.splice(i, 1);
+    }
+  }
+}
+const dmgFlashEl = document.getElementById('dmgflash');
+let dmgFlashTime = 0;
+const botRocketMat = new THREE.MeshBasicMaterial({ color: 0xe86a7a });
+
+function killBot(b) {
+  spawnGibs(b.x, b.y, b.z);
+  b.alive = false;
+  b.respawnCD = 3;
+  b.vis.group.visible = false;
+  playerFrags++;
+  playSound('rocketExplode', 0.7);
+}
+
+// Line-of-sight check (step-trace through world)
+function hasLOS(x1, y1, z1, x2, y2, z2) {
+  const dx=x2-x1, dy=y2-y1, dz=z2-z1;
+  const dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
+  if (dist < 1) return true;
+  const steps = Math.min(30, Math.ceil(dist / 48));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (isInsideSolid(x1+dx*t, y1+dy*t, z1+dz*t)) return false;
+  }
+  return true;
+}
+
+// Bot wall collision (parametrized for multi-bot) — 2 iterations for stronger push-out
+function collideBotWalls(bot) {
+  const r = CFG.playerRadius + 2; // Etwas größerer Radius als Spieler → kein Wand-Clipping
+  const feet = bot.y - CFG.playerHeight;
+  const bodyY = feet + CFG.playerHeight * 0.5;
+
+  for (let iter = 0; iter < 2; iter++) {
+  for (const b of colBoxes) {
+    if (feet >= b.top - CFG.stepUp) continue;
+    if (bot.y <= b.bottom) continue;
+    const cx = Math.max(b.x1, Math.min(bot.x, b.x2));
+    const cz = Math.max(b.z1, Math.min(bot.z, b.z2));
+    const dx = bot.x - cx, dz = bot.z - cz;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+    if (dist < r && dist > 0.001) {
+      const push = (r - dist) * 1.05; // 5% extra push
+      bot.x += (dx/dist) * push;
+      bot.z += (dz/dist) * push;
+      const vd = bot.vx*(dx/dist) + bot.vz*(dz/dist);
+      if (vd < 0) { bot.vx -= vd*(dx/dist); bot.vz -= vd*(dz/dist); }
+    }
+  }
+
+  const gx = Math.floor(bot.x/GRID_SZ), gz = Math.floor(bot.z/GRID_SZ);
+  for (let dgx=-1;dgx<=1;dgx++) for (let dgz=-1;dgz<=1;dgz++) {
+    const cell = wallGrid[(gx+dgx)+','+(gz+dgz)];
+    if (!cell) continue;
+    for (const t of cell) {
+      if (feet > t.maxY || bot.y < t.minY) continue;
+      if (bot.x+r < t.minX || bot.x-r > t.maxX) continue;
+      if (bot.z+r < t.minZ || bot.z-r > t.maxZ) continue;
+      const cp = closestPtTri(bot.x, bodyY, bot.z, t);
+      if (cp.y <= feet+CFG.stepUp && cp.y >= feet-4) continue;
+      if (cp.y < feet-4 || cp.y > bot.y) continue;
+      const cdx = bot.x-cp.x, cdz = bot.z-cp.z;
+      const hdist = Math.sqrt(cdx*cdx + cdz*cdz);
+      if (hdist < r && hdist > 0.01) {
+        const push = (r-hdist) * 1.05;
+        bot.x += (cdx/hdist)*push;
+        bot.z += (cdz/hdist)*push;
+      }
+    }
+  }
+  } // end iter loop
+}
+
+function spawnBot(b) {
+  // Spawn far from player AND other bots
+  let best = SPAWNS[0], bestDist = 0;
+  for (const sp of SPAWNS) {
+    let d = Math.sqrt((sp.x-player.x)**2 + (sp.z-player.z)**2);
+    for (const ob of bots) {
+      if (ob === b || !ob.alive) continue;
+      const bd = Math.sqrt((sp.x-ob.x)**2 + (sp.z-ob.z)**2);
+      if (bd < 200) d *= 0.3;
+    }
+    if (d > bestDist) { bestDist = d; best = sp; }
+  }
+  b.x = best.x; b.y = best.y; b.z = best.z;
+  b.vx = 0; b.vy = 0; b.vz = 0;
+  b.hp = 80; b.alive = true;
+  b.target = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+  b.fireCD = 2 + Math.random() * 2;
+  b.vis.group.visible = true;
+}
+initBots();
+
+function updateBot(b, dt) {
+  if (!b.alive) {
+    b.respawnCD -= dt;
+    if (b.respawnCD <= 0) spawnBot(b);
+    return;
+  }
+
+  // Navigation
+  const tdx = b.target.x - b.x, tdz = b.target.z - b.z;
+  const tdist = Math.sqrt(tdx*tdx + tdz*tdz);
+  if (tdist < 80 || tdist > 3000) {
+    b.target = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+  }
+
+  const pdx = player.x - b.x, pdz = player.z - b.z;
+  const playerDist = Math.sqrt(pdx*pdx + pdz*pdz);
+
+  // LOS check (reduced frequency for performance with multiple bots)
+  if (Math.random() < 0.1) {
+    const eyeBot = b.y - CFG.playerHeight + CFG.eyeHeight;
+    const eyePlayer = player.y - CFG.playerHeight + CFG.eyeHeight;
+    b.seesPlayer = playerDist < 1200 && hasLOS(b.x, eyeBot, b.z, player.x, eyePlayer, player.z);
+  }
+
+  let moveX, moveZ, spd = 220;
+  if (b.seesPlayer && playerDist < 250) {
+    moveX = -pdx; moveZ = -pdz; spd = 300;
+  } else if (b.seesPlayer && playerDist < 600) {
+    const sa = Math.sin(gameTime * 1.8) * 0.7;
+    const cs = Math.cos(sa), sn = Math.sin(sa);
+    moveX = pdx * cs - pdz * sn;
+    moveZ = pdx * sn + pdz * cs;
+    spd = 260;
+  } else if (b.seesPlayer) {
+    moveX = pdx; moveZ = pdz; spd = 280;
+  } else {
+    moveX = tdx; moveZ = tdz;
+  }
+  const moveDist = Math.sqrt(moveX*moveX + moveZ*moveZ);
+
+  if (moveDist > 1) {
+    const wantVx = (moveX/moveDist) * spd;
+    const wantVz = (moveZ/moveDist) * spd;
+    b.vx += (wantVx - b.vx) * 5 * dt;
+    b.vz += (wantVz - b.vz) * 5 * dt;
+    b.yaw = Math.atan2(-b.vx, -b.vz);
+  }
+
+  // Gravity
+  b.vy -= CFG.sv_gravity * dt;
+
+  // Velocity cap
+  const bspd = Math.sqrt(b.vx*b.vx + b.vz*b.vz);
+  if (bspd > 400) { b.vx *= 400/bspd; b.vz *= 400/bspd; }
+  if (b.vy < -800) b.vy = -800;
+
+  // Move in sub-steps for collision safety
+  const subSteps = 2;
+  const subDt = dt / subSteps;
+  for (let ss = 0; ss < subSteps; ss++) {
+    const oldX = b.x, oldY = b.y, oldZ = b.z;
+    b.x += b.vx * subDt;
+    b.y += b.vy * subDt;
+    b.z += b.vz * subDt;
+
+    const botFeet = b.y - CFG.playerHeight;
+    const fl = getFloorAt(b.x, botFeet, b.z);
+    if (botFeet <= fl) {
+      b.y = fl + CFG.playerHeight;
+      if (b.vy < 0) b.vy = 0;
+      b.onGround = true;
+    } else {
+      b.onGround = false;
+    }
+
+    collideBotWalls(b);
+
+    const be = b.y - CFG.playerHeight + CFG.eyeHeight;
+    const bf = b.y - CFG.playerHeight + 8;
+    if (isInsideSolid(b.x, be, b.z) || isInsideSolid(b.x, bf, b.z)) {
+      b.x = oldX; b.y = oldY; b.z = oldZ;
+      b.vx *= -0.5; b.vz *= -0.5;
+      break;
+    }
+  }
+
+  if (isInsideSolid(b.x, b.y - CFG.playerHeight + CFG.eyeHeight, b.z)) {
+    spawnBot(b);
+    return;
+  }
+
+  // Stuck detection: wenn Bot sich kaum bewegt hat, neues Ziel + kurzer Jump
+  const moveDelta = Math.abs(b.x - b.lastX) + Math.abs(b.z - b.lastZ);
+  if (moveDelta < 1) { b.stuckTime += dt; } else { b.stuckTime = 0; }
+  b.lastX = b.x; b.lastZ = b.z;
+  if (b.stuckTime > 0.5) {
+    b.target = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+    if (b.onGround) { b.vy = CFG.sv_jumpvelocity * 0.6; b.onGround = false; }
+    b.stuckTime = 0;
+  }
+
+  // Random jump
+  if (b.onGround && Math.random() < 0.008) {
+    b.vy = CFG.sv_jumpvelocity;
+    b.onGround = false;
+  }
+
+  if (b.y < -900) spawnBot(b);
+
+  // Bot teleporter check
+  if (!b.teleCD || b.teleCD <= 0) {
+    const feet = b.y - CFG.playerHeight;
+    for (const tp of teleporters) {
+      if (b.x >= tp.x1 && b.x <= tp.x2 && b.z >= tp.z1 && b.z <= tp.z2 &&
+          b.y >= tp.y1 && feet <= tp.y2) {
+        b.x = tp.dx; b.y = tp.dy; b.z = tp.dz;
+        const spd = Math.sqrt(b.vx*b.vx + b.vz*b.vz);
+        b.vx = -Math.sin(tp.yaw) * spd;
+        b.vz = -Math.cos(tp.yaw) * spd;
+        b.yaw = tp.yaw;
+        b.teleCD = 0.5;
+        break;
+      }
+    }
+  } else { b.teleCD -= dt; }
+
+  // Bot jump pad check
+  if (!b.jpCD || b.jpCD <= 0) {
+    const feet = b.y - CFG.playerHeight;
+    for (const jp of jumpPads) {
+      if (b.x >= jp.x1 && b.x <= jp.x2 && b.z >= jp.z1 && b.z <= jp.z2 &&
+          feet >= jp.y1 - 10 && feet <= jp.y2 + 10 && b.vy <= 50) {
+        b.vx = jp.vx; b.vy = jp.vy; b.vz = jp.vz;
+        b.onGround = false;
+        b.jpCD = 0.3;
+        break;
+      }
+    }
+  } else { b.jpCD -= dt; }
+
+  // Fire
+  b.fireCD -= dt;
+  if (settings.botShoots && b.fireCD <= 0 && b.seesPlayer && playerDist > 100 && playerDist < 1200) {
+    const useRail = settings.mode === 'instagib' ||
+      (settings.mode === 'mixed' && Math.random() < 0.35);
+    if (useRail) {
+      botFireRail(b);
+      b.fireCD = 2.0 + Math.random() * 2;
+    } else if (settings.mode !== 'instagib') {
+      const pdy = (player.y - CFG.playerHeight*0.5) - (b.y - CFG.playerHeight*0.5);
+      const pd3 = Math.sqrt(pdx*pdx + pdy*pdy + pdz*pdz);
+      if (pd3 > 1) {
+        const tof = pd3 / CFG.rk_speed;
+        const lx = player.x + player.vx*tof*0.4 - b.x;
+        const ly = (player.y - CFG.playerHeight*0.5) + player.vy*tof*0.3 - (b.y - CFG.playerHeight + CFG.eyeHeight);
+        const lz = player.z + player.vz*tof*0.4 - b.z;
+        const ld = Math.sqrt(lx*lx + ly*ly + lz*lz);
+        if (ld > 1) {
+          const eyeY = b.y - CFG.playerHeight + CFG.eyeHeight;
+          const mesh = new THREE.Mesh(rocketGeo, botRocketMat);
+          const light = new THREE.PointLight(0xe86a7a, 0.6, 100);
+          mesh.position.set(b.x, eyeY, b.z);
+          light.position.set(b.x, eyeY, b.z);
+          scene.add(mesh); scene.add(light);
+          rockets.push({
+            x:b.x, y:eyeY, z:b.z,
+            vx:(lx/ld)*CFG.rk_speed, vy:(ly/ld)*CFG.rk_speed, vz:(lz/ld)*CFG.rk_speed,
+            mesh, light, life:4.0, owner:'bot'
+          });
+          playSound('rocketFire', 0.3);
+          b.fireCD = 1.5 + Math.random() * 2;
+        }
+      }
+    }
+  }
+
+  // Hit flash (per-bot materials)
+  if (b.hitFlash > 0) {
+    b.hitFlash -= dt;
+    b.vis.edgeMat.color.setHex(0xffffff);
+    b.vis.fillMat.opacity = 0.8;
+    b.vis.fillMat.color.setHex(0xffffff);
+  } else {
+    b.vis.edgeMat.color.setHex(0xff80a0);
+    b.vis.fillMat.opacity = 0.65;
+    b.vis.fillMat.color.setHex(0xff2050);
+  }
+
+  // HP bar
+  const hpPct = Math.max(0, b.hp / 80);
+  b.vis.hpMesh.scale.x = hpPct;
+  b.vis.hpMat.color.setHex(hpPct > 0.5 ? 0x2abfbf : hpPct > 0.25 ? 0xf4a842 : 0xe86a7a);
+  b.vis.hpMesh.lookAt(camera.position);
+
+  // Update visual
+  b.vis.group.position.set(b.x, b.y - CFG.playerHeight*0.5, b.z);
+  b.vis.group.rotation.y = b.yaw;
+}
+
+// === PHYSICS TICK ===
+let gameTime = 0;
+
+function physicsTick(dt) {
+  if (!pointerLocked) return; // Pause wenn ESC
+  gameTime += dt;
+
+  // Maus → Rotation
+  player.yaw -= mouseDX * CFG.sensitivity;
+  player.pitch += mouseDY * CFG.sensitivity; // invertiert
+  player.pitch = Math.max(-Math.PI*89/180, Math.min(Math.PI*89/180, player.pitch));
+  mouseDX = 0; mouseDY = 0;
+
+  // Jump
+  doJump();
+
+  // Waffe feuern
+  if (firePressed) {
+    if (settings.mode === 'instagib') fireRail(gameTime);
+    else if (settings.mode === 'rocket') fireRocket(gameTime);
+    else { // mixed
+      if (player.weapon === 'rail') fireRail(gameTime);
+      else fireRocket(gameTime);
+    }
+    firePressed = false;
+  }
+
+  // Movement
+  const wishdir = getWishDir();
+  if (player.onGround) groundMove(wishdir, dt);
+  else airMove(wishdir, dt);
+
+  // Position updaten
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  player.z += player.vz * dt;
+
+  // Boden-/Plattform-Kollision (mit Q3-style Stair-Push)
+  const prevFeet = player.y - CFG.playerHeight;
+  const floorY = getFloorHeight(player.x, player.z);
+  if (prevFeet <= floorY) {
+    const stepH = floorY - prevFeet;
+    player.y = floorY + CFG.playerHeight;
+    if (player.vy < 0) player.vy = 0;
+    // Stair push: horizontale Speed → vertikalen Impuls bei Step-Up
+    if (stepH > 2 && stepH <= CFG.stepUp) {
+      const hspd = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+      if (hspd > 100) player.vy = Math.max(player.vy, hspd * 0.18);
+    }
+    player.onGround = true;
+  } else {
+    player.onGround = false;
+  }
+
+  // Landing-Sound (Luft → Boden)
+  if (player.onGround && !wasOnGround) {
+    playSound('land', 0.4);
+    footstepDist = 0;
+  }
+
+  // Footsteps (nicht beim Schleichen)
+  if (player.onGround && !keys.shift) {
+    const hspd = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+    if (hspd > 50) {
+      footstepDist += hspd * dt;
+      if (footstepDist > 110) {
+        footstepDist = 0;
+        playSound('boot' + (1 + Math.floor(Math.random() * 4)), 0.25);
+      }
+    }
+  }
+  wasOnGround = player.onGround;
+
+  // Wand-Kollision
+  collideWalls();
+
+  // Teleporter-Check (body overlap — feet to head)
+  if (teleCD > 0) { teleCD -= dt; }
+  else {
+    const feet = player.y - CFG.playerHeight;
+    for (const tp of teleporters) {
+      if (player.x >= tp.x1 && player.x <= tp.x2 &&
+          player.z >= tp.z1 && player.z <= tp.z2 &&
+          player.y >= tp.y1 && feet <= tp.y2) {
+        player.x = tp.dx; player.y = tp.dy; player.z = tp.dz;
+        // Speed beibehalten, Richtung an Teleporter-Yaw anpassen
+        const spd = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+        player.vx = -Math.sin(tp.yaw) * spd;
+        player.vz = -Math.cos(tp.yaw) * spd;
+        player.yaw = tp.yaw;
+        teleCD = 0.5;
+        playSound('telein', 0.6);
+        break;
+      }
+    }
+  }
+
+  // Jump-Pad-Check
+  if (jpCD > 0) { jpCD -= dt; }
+  else {
+    const feet = player.y - CFG.playerHeight;
+    for (const jp of jumpPads) {
+      if (player.x >= jp.x1 && player.x <= jp.x2 &&
+          player.z >= jp.z1 && player.z <= jp.z2 &&
+          feet >= jp.y1 - 10 && feet <= jp.y2 + 10 &&
+          player.vy <= 50) {
+        player.vx = jp.vx; player.vy = jp.vy; player.vz = jp.vz;
+        player.onGround = false;
+        jpCD = 0.3;
+        playSound('jumppad', 0.7);
+        break;
+      }
+    }
+  }
+
+  // Player death — HP or fall
+  if (player.hp <= 0 || player.y < -900) {
+    botFrags++;
+    player.hp = 100;
+    const sp = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+    player.x = sp.x; player.y = sp.y; player.z = sp.z;
+    player.vx = 0; player.vy = 0; player.vz = 0;
+    dmgFlashTime = 0.5;
+    playSound('rocketExplode', 0.6);
+  }
+
+  // Damage flash (player)
+  if (dmgFlashTime > 0) {
+    dmgFlashTime -= dt;
+    dmgFlashEl.style.opacity = Math.min(1, dmgFlashTime * 5);
+  } else {
+    dmgFlashEl.style.opacity = 0;
+  }
+
+  // Rockets + Beams updaten
+  updateRockets(dt);
+  updateBeams(dt);
+  updateGibs(dt);
+
+  // All bots updaten
+  for (const b of bots) updateBot(b, dt);
+}
+
+// === HUD ===
+const hudEl = document.getElementById('hud');
+const debugEl = document.getElementById('debug');
+
+function updateHUD() {
+  const speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+  const si = Math.round(speed);
+  hudEl.textContent = si;
+  if (speed < 320) {
+    hudEl.style.color = '#2abfbf';
+    hudEl.style.textShadow = '0 0 8px rgba(42,191,191,0.5)';
+  } else if (speed < 600) {
+    hudEl.style.color = '#f4a842';
+    hudEl.style.textShadow = '0 0 8px rgba(244,168,66,0.5)';
+  } else {
+    hudEl.style.color = '#e86a7a';
+    hudEl.style.textShadow = '0 0 8px rgba(232,106,122,0.5)';
+  }
+  let wpn;
+  if (settings.mode === 'instagib') wpn = '<span style="color:#2abfbf">INSTAGIB</span>';
+  else if (settings.mode === 'mixed') {
+    const cur = player.weapon === 'rail' ? '<span style="color:#2abfbf">RAIL</span>' : '<span style="color:#f4a842">RL</span>';
+    wpn = '<span style="color:#f0ece6">MIXED</span> ' + cur + ' <span style="color:#3a6080">[Q/R]</span>';
+  } else wpn = '<span style="color:#f4a842">ROCKET</span>';
+  debugEl.innerHTML =
+    `HP: <span style="color:${player.hp>50?'#2abfbf':player.hp>25?'#f4a842':'#e86a7a'}">${Math.round(player.hp)}</span> | ` +
+    wpn + ` | Frags: <span style="color:#2abfbf">${playerFrags}</span>:<span style="color:#e86a7a">${botFrags}</span>`;
+  // Crosshair color follows active weapon
+  const chc = (settings.mode === 'instagib' || (settings.mode === 'mixed' && player.weapon === 'rail'))
+    ? 'rgba(42,191,191,0.9)' : 'rgba(240,236,230,0.8)';
+  crosshairEl.style.setProperty('--ch-color', chc);
+}
+
+// === GAME LOOP ===
+let lastTime = 0, accumulator = 0;
+
+function gameLoop(timestamp) {
+  requestAnimationFrame(gameLoop);
+  if (lastTime === 0) { lastTime = timestamp; return; }
+  const delta = Math.min(0.05, (timestamp - lastTime) / 1000);
+  lastTime = timestamp;
+  accumulator += delta;
+  while (accumulator >= CFG.tickRate) {
+    physicsTick(CFG.tickRate);
+    accumulator -= CFG.tickRate;
+  }
+  camera.position.set(player.x, player.y - CFG.playerHeight + CFG.eyeHeight, player.z);
+  camera.quaternion.setFromEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ'));
+  renderer.render(scene, camera);
+  updateHUD();
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
