@@ -81,6 +81,12 @@ canvas { display: block; width: 100vw; height: 100vh; }
 
 <div id="hud">0</div>
 <div id="debug"></div>
+<div id="postermark" style="position:fixed;bottom:100px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:13px;color:#e86a7a;background:rgba(10,22,40,0.85);padding:8px 16px;border-radius:6px;pointer-events:none;z-index:10;opacity:0;transition:opacity 0.5s;white-space:nowrap;"></div>
+<div id="loveHud" style="position:fixed;bottom:30px;left:30px;font-family:'Courier New',monospace;pointer-events:none;z-index:10;user-select:none;opacity:0;transition:opacity 0.3s;text-align:left;">
+  <div id="loveCount" style="font-size:96px;font-weight:bold;color:#e86a7a;text-shadow:0 0 16px rgba(232,106,122,0.6);line-height:0.9;">0</div>
+  <div style="font-size:15px;font-weight:bold;color:#e86a7a;text-shadow:0 0 8px rgba(232,106,122,0.4);letter-spacing:5px;">LOVE 2 ZOE</div>
+</div>
+<canvas id="wpnIcon" width="80" height="80" style="position:fixed;bottom:20px;right:20px;width:80px;height:80px;pointer-events:none;z-index:10;opacity:0.85;"></canvas>
 <div id="crosshair"></div>
 <div id="dmgflash"></div>
 <div id="overlay">
@@ -103,13 +109,23 @@ canvas { display: block; width: 100vw; height: 100vh; }
     <button class="menu-btn" id="btn-bots3">3</button>
     <button class="menu-btn" id="btn-bots4">4</button>
   </div>
+  <div class="menu-row">
+    <span class="menu-label">BHOP</span>
+    <button class="menu-btn" id="btn-bhop-on">PK MODE</button>
+    <button class="menu-btn active" id="btn-bhop-off">OFF</button>
+  </div>
+  <div class="menu-row">
+    <span class="menu-label">WALLJUMP</span>
+    <button class="menu-btn" id="btn-wj-on">WARSOW</button>
+    <button class="menu-btn active" id="btn-wj-off">OFF</button>
+  </div>
   <div class="menu-start" id="startBtn">Click to Play</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 // === SETTINGS (menu-configurable) ===
-const settings = { mode: 'rocket', botShoots: true, botCount: 1 };
+const settings = { mode: 'rocket', botShoots: true, botCount: 1, pkBhop: false, wallJump: false };
 
 // === CONFIG ===
 const CFG = {
@@ -175,13 +191,51 @@ Promise.all([
   loadSound('jumppad', 'assets/sounds/jumppad.wav'),
   loadSound('hit', 'assets/sounds/hit.wav'),
   loadSound('railFire', 'assets/sounds/railgf1a.wav'),
+  loadSound('plasma', 'assets/sounds/plasma.wav'),
+  loadSound('lgFire', 'assets/sounds/lg_fire.wav'),
+  loadSound('lgHit', 'assets/sounds/lg_hit.wav'),
 ]);
 
 // === INPUT ===
-const keys = { w: false, s: false, a: false, d: false, space: false, shift: false };
+const keys = { w: false, s: false, a: false, d: false, space: false, shift: false, e: false };
 let mouseDX = 0, mouseDY = 0;
 let pointerLocked = false;
 let firePressed = false;
+let mapMesh = null; // Referenz für Poster-Raycast
+
+// === HERZ-WAFFE ===
+let heartKeyDown = false;
+let heartCooldown = 0;
+const HEART_FIRE_RATE = 0.1; // 10 Herzen pro Sekunde
+const HEART_SPEED = 1500;
+const hearts = []; // fliegende Herzen
+const stuckHearts = []; // an Wänden klebende Herzen
+
+function createHeartShape() {
+  const s = new THREE.Shape();
+  // Herzform: Rundungen oben, Spitze unten (Y invertiert)
+  s.moveTo(0, -5);
+  s.bezierCurveTo(0, -5, -1, 0, -5, 0);
+  s.bezierCurveTo(-11, 0, -11, -7, -11, -7);
+  s.bezierCurveTo(-11, -11, -8, -15.4, 0, -19);
+  s.bezierCurveTo(8, -15.4, 11, -11, 11, -7);
+  s.bezierCurveTo(11, -7, 11, 0, 5, 0);
+  s.bezierCurveTo(1, 0, 0, -5, 0, -5);
+  return s;
+}
+const heartGeo = new THREE.ShapeGeometry(createHeartShape());
+heartGeo.translate(0, 9.5, 0);
+const heartMat = new THREE.MeshBasicMaterial({ color: 0xe86a7a, side: THREE.DoubleSide });
+
+function fireHeart() {
+  const dir = camera.getWorldDirection(new THREE.Vector3());
+  const mesh = new THREE.Mesh(heartGeo, heartMat);
+  mesh.position.copy(camera.position).addScaledVector(dir, 30);
+  mesh.lookAt(mesh.position.clone().add(dir));
+  scene.add(mesh);
+  hearts.push({ mesh, vx: dir.x * HEART_SPEED, vy: dir.y * HEART_SPEED, vz: dir.z * HEART_SPEED, life: 5.0 });
+  playSound('plasma', 0.4);
+}
 
 document.addEventListener('keydown', e => {
   switch(e.code) {
@@ -193,6 +247,32 @@ document.addEventListener('keydown', e => {
     case 'ShiftLeft': case 'ShiftRight': keys.shift = true; break;
     case 'KeyQ': if (settings.mode === 'mixed') player.weapon = 'rocket'; break;
     case 'KeyR': if (settings.mode === 'mixed') player.weapon = 'rail'; break;
+    case 'KeyC': if (settings.mode === 'mixed') player.weapon = 'lg'; break;
+    case 'KeyE': keys.e = true; break;
+    case 'KeyF':
+      if (pointerLocked && mapMesh) {
+        const rc = new THREE.Raycaster();
+        rc.set(camera.position, camera.getWorldDirection(new THREE.Vector3()));
+        const hits = rc.intersectObject(mapMesh);
+        if (hits.length > 0) {
+          const h = hits[0];
+          const n = h.face.normal;
+          const ry = Math.atan2(n.x, n.z);
+          const info = `POSTER-SPOT: { x:${Math.round(h.point.x)}, y:${Math.round(h.point.y)}, z:${Math.round(h.point.z)}, ry:${ry.toFixed(2)}, nx:${n.x.toFixed(2)}, ny:${n.y.toFixed(2)}, nz:${n.z.toFixed(2)} }`;
+          console.log(info);
+          // Auf dem Bildschirm anzeigen
+          const el = document.getElementById('postermark');
+          if (el) { el.textContent = info; el.style.opacity = 1; setTimeout(() => el.style.opacity = 0, 4000); }
+          // Marker-Kugel zur Visualisierung
+          const marker = new THREE.Mesh(
+            new THREE.SphereGeometry(5, 8, 8),
+            new THREE.MeshBasicMaterial({ color: 0xe86a7a })
+          );
+          marker.position.copy(h.point);
+          scene.add(marker);
+        }
+      }
+      break;
   }
 });
 document.addEventListener('keyup', e => {
@@ -203,6 +283,7 @@ document.addEventListener('keyup', e => {
     case 'KeyD': keys.d = false; break;
     case 'Space': keys.space = false; break;
     case 'ShiftLeft': case 'ShiftRight': keys.shift = false; break;
+    case 'KeyE': keys.e = false; break;
   }
 });
 document.addEventListener('mousemove', e => {
@@ -212,7 +293,13 @@ document.addEventListener('mousemove', e => {
 });
 document.addEventListener('mousedown', e => {
   if (e.button === 0 && pointerLocked) firePressed = true;
+  if (e.button === 2 && pointerLocked) heartKeyDown = true;
 });
+document.addEventListener('mouseup', e => {
+  if (e.button === 0) firePressed = false;
+  if (e.button === 2) heartKeyDown = false;
+});
+document.addEventListener('contextmenu', e => e.preventDefault());
 
 // Pointer Lock + Settings Menu
 const overlay = document.getElementById('overlay');
@@ -249,6 +336,14 @@ document.getElementById('btn-bots1').onclick = (e) => { e.stopPropagation(); set
 document.getElementById('btn-bots2').onclick = (e) => { e.stopPropagation(); settings.botCount = 2; setBotCountBtn('btn-bots2'); initBots(); };
 document.getElementById('btn-bots3').onclick = (e) => { e.stopPropagation(); settings.botCount = 3; setBotCountBtn('btn-bots3'); initBots(); };
 document.getElementById('btn-bots4').onclick = (e) => { e.stopPropagation(); settings.botCount = 4; setBotCountBtn('btn-bots4'); initBots(); };
+
+function setBhopBtn(id) { document.getElementById('btn-bhop-on').classList.toggle('active', id==='btn-bhop-on'); document.getElementById('btn-bhop-off').classList.toggle('active', id==='btn-bhop-off'); }
+function setWjBtn(id) { document.getElementById('btn-wj-on').classList.toggle('active', id==='btn-wj-on'); document.getElementById('btn-wj-off').classList.toggle('active', id==='btn-wj-off'); }
+document.getElementById('btn-bhop-on').onclick = (e) => { e.stopPropagation(); settings.pkBhop = true; setBhopBtn('btn-bhop-on'); };
+document.getElementById('btn-bhop-off').onclick = (e) => { e.stopPropagation(); settings.pkBhop = false; setBhopBtn('btn-bhop-off'); };
+document.getElementById('btn-wj-on').onclick = (e) => { e.stopPropagation(); settings.wallJump = true; setWjBtn('btn-wj-on'); };
+document.getElementById('btn-wj-off').onclick = (e) => { e.stopPropagation(); settings.wallJump = false; setWjBtn('btn-wj-off'); };
+
 document.getElementById('startBtn').addEventListener('click', () => {
   document.body.requestPointerLock();
   if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -489,7 +584,8 @@ fetch('assets/map.bin').then(r => r.arrayBuffer()).then(buf => {
     vertexColors: true, side: THREE.FrontSide,
     polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4
   });
-  scene.add(new THREE.Mesh(flatGeo, mapMat));
+  mapMesh = new THREE.Mesh(flatGeo, mapMat);
+  scene.add(mapMesh);
   console.log('Map loaded: ' + nv + ' verts, ' + nt + ' tris → ' + nv2 + ' flat verts');
 });
 
@@ -559,31 +655,44 @@ for (const jp of jumpPads) {
 }
 
 // === WALL POSTERS ===
-const posterTex1 = new THREE.TextureLoader().load('assets/poster.jpg');
-posterTex1.minFilter = THREE.LinearFilter;
-const posterMat1 = new THREE.MeshBasicMaterial({ map: posterTex1, side: THREE.DoubleSide });
-const posterTex2 = new THREE.TextureLoader().load('assets/poster2.jpg');
-posterTex2.minFilter = THREE.LinearFilter;
-const posterMat2 = new THREE.MeshBasicMaterial({ map: posterTex2, side: THREE.DoubleSide });
-// 4 large posters at eye-level (floor+50) near spawn points, 8+ units from walls
+const posterTextures = {};
+const posterMaterials = {};
+function loadPoster(name, url) {
+  const tex = new THREE.TextureLoader().load(url);
+  tex.minFilter = THREE.LinearFilter;
+  posterTextures[name] = tex;
+  posterMaterials[name] = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+}
+loadPoster('p3', 'assets/poster3.jpg');
+loadPoster('p4', 'assets/poster4.jpg');
+loadPoster('p5', 'assets/poster5.jpg');
+loadPoster('p6', 'assets/poster6.jpg');
+loadPoster('p7', 'assets/poster7.jpg');
+loadPoster('p8', 'assets/poster8.jpg');
+
 const posterSpots = [
-  // poster1 — RA area near Spawn 2 (floor=88), south side of RA tele entrance
-  { x:30, y:138, z:-575, ry:0, w:110, h:150, mat: posterMat1 },
-  // poster1 — Upper area near Spawn 0 (floor=8)
-  { x:290, y:58, z:-152, ry:Math.PI/2, w:110, h:150, mat: posterMat1 },
-  // poster2 — Mid area near Spawn 1 (floor=-8)
-  { x:1000, y:42, z:496, ry:-Math.PI/2, w:100, h:135, mat: posterMat2 },
-  // poster2 — Lower area near jumppad (floor=-200)
-  { x:48, y:-150, z:420, ry:0, w:100, h:135, mat: posterMat2 },
+  // Spot 1: Blumen-Kleid — Wand Richtung -Z
+  { x:382, y:75, z:319, ry:3.14, w:110, h:150, mat: 'p3' },
+  // Spot 2: Ironman — Wand Richtung -X
+  { x:1131, y:77, z:391, ry:-1.57, w:110, h:150, mat: 'p5' },
+  // Spot 3: Dirty Dancing Cartoon — Wand Richtung +Z
+  { x:792, y:-214, z:-95, ry:0, w:130, h:130, mat: 'p6' },
+  // Spot 4: Couple Kiss — Wand Richtung +X
+  { x:-319, y:111, z:160, ry:1.57, w:130, h:100, mat: 'p7' },
+  // Spot 5: Mirror Selfie — Wand Richtung +Z (höher + größer)
+  { x:63, y:149, z:-175, ry:0, w:160, h:210, mat: 'p8' },
 ];
+const posterMeshes = [];
 for (const p of posterSpots) {
   const geo = new THREE.PlaneGeometry(p.w, p.h);
-  const mesh = new THREE.Mesh(geo, p.mat);
+  const mesh = new THREE.Mesh(geo, posterMaterials[p.mat]);
   mesh.position.set(p.x, p.y, p.z);
   mesh.rotation.y = p.ry;
   mesh.renderOrder = 2;
   scene.add(mesh);
+  posterMeshes.push(mesh);
 }
+let loveCounter = 0;
 
 // Ground plane far below — visual catch
 const groundGeo = new THREE.PlaneGeometry(6000, 6000);
@@ -695,8 +804,55 @@ function airMove(wishdir, dt) {
   player.vy -= CFG.sv_gravity * dt;
 }
 
+// === PAINKILLER BHOP ===
+let pkLandTime = 0; // Zeitpunkt der letzten Landung
+let pkChain = 0;    // Konsekutive perfekte Hops
+const PK_WINDOW = 0.08; // 80ms Timing-Fenster
+const PK_BOOST = 1.06;  // 6% Speed-Boost pro Hop
+const PK_MAX_CHAIN = 20; // Max Chain
+const PK_MAX_SPEED = 1200; // Speed-Cap
+
+// === WARSOW WALL JUMP ===
+let wallJumpCD = 0;
+const WJ_COOLDOWN = 0.4;
+const WJ_PUSH = 400;   // Horizontaler Push weg von Wand
+const WJ_UP = 300;     // Vertikaler Boost
+
+function getNearestWallNormal() {
+  const r = CFG.playerRadius + 8; // Etwas weiter als Kollisionsradius
+  const feet = player.y - CFG.playerHeight;
+  let bestDist = r, bestNx = 0, bestNz = 0;
+  for (const b of colBoxes) {
+    if (feet >= b.top - CFG.stepUp) continue;
+    if (player.y <= b.bottom) continue;
+    const cx = Math.max(b.x1, Math.min(player.x, b.x2));
+    const cz = Math.max(b.z1, Math.min(player.z, b.z2));
+    const dx = player.x - cx, dz = player.z - cz;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+    if (dist < bestDist && dist > 0.001) {
+      bestDist = dist;
+      bestNx = dx/dist;
+      bestNz = dz/dist;
+    }
+  }
+  if (bestDist < r) return { nx: bestNx, nz: bestNz, dist: bestDist };
+  return null;
+}
+
 function doJump() {
   if (keys.space && player.onGround) {
+    // Painkiller Bhop: Check Timing-Fenster
+    if (settings.pkBhop && pkLandTime > 0 && (gameTime - pkLandTime) <= PK_WINDOW) {
+      pkChain = Math.min(pkChain + 1, PK_MAX_CHAIN);
+      const hspd = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+      const newSpd = Math.min(hspd * PK_BOOST, PK_MAX_SPEED);
+      if (hspd > 10) {
+        player.vx = player.vx / hspd * newSpd;
+        player.vz = player.vz / hspd * newSpd;
+      }
+    } else {
+      pkChain = 0;
+    }
     player.vy = CFG.sv_jumpvelocity;
     player.onGround = false;
     playSound('jump', 0.5);
@@ -1103,6 +1259,90 @@ function botFireRail(b) {
     }
     dmgFlashTime = 0.5;
     playSound('hit', 0.8);
+  }
+}
+
+// === LIGHTNING GUN ===
+const LG_RANGE = 768;
+const LG_DPS = 125; // Damage per second (Q3: ~8dmg per 50ms tick = 160dps, wir sind etwas milder)
+const LG_TICK = 0.05; // 50ms pro Tick (20Hz)
+let lgFiring = false;
+let lgLastTick = 0;
+let lgBeamMesh = null;
+let lgSoundSource = null;
+let lgSoundPlaying = false;
+
+function startLGSound() {
+  if (lgSoundPlaying || !sndBuf['lgFire']) return;
+  lgSoundSource = audioCtx.createBufferSource();
+  const g = audioCtx.createGain();
+  lgSoundSource.buffer = sndBuf['lgFire'];
+  lgSoundSource.loop = true;
+  g.gain.value = 0.5;
+  lgSoundSource.connect(g).connect(audioCtx.destination);
+  lgSoundSource.start();
+  lgSoundPlaying = true;
+}
+
+function stopLGSound() {
+  if (lgSoundSource && lgSoundPlaying) {
+    try { lgSoundSource.stop(); } catch(e) {}
+    lgSoundPlaying = false;
+    lgSoundSource = null;
+  }
+}
+
+function updateLG(dt) {
+  const shouldFire = firePressed && pointerLocked && settings.mode === 'mixed' && player.weapon === 'lg';
+
+  if (shouldFire) {
+    if (!lgFiring) { startLGSound(); lgFiring = true; }
+
+    lgLastTick += dt;
+    if (lgLastTick >= LG_TICK) {
+      lgLastTick -= LG_TICK;
+      const dir = getCamForward();
+      const ex = player.x, ey = player.y - CFG.playerHeight + CFG.eyeHeight, ez = player.z;
+
+      // Hit-Check (closest bot)
+      let hitDist = LG_RANGE, hitSphere = null, hitBot = null;
+      for (const b of bots) {
+        if (!b.alive) continue;
+        const spheres = getHitSpheres(b.x, b.y, b.z);
+        const hit = raySphereHit(ex,ey,ez, dir.x,dir.y,dir.z, spheres);
+        if (hit && hit.t < hitDist) { hitDist = hit.t; hitSphere = hit.sphere; hitBot = b; }
+      }
+      const wd = worldTrace(ex,ey,ez, dir.x,dir.y,dir.z, hitDist);
+      if (wd < hitDist) { hitDist = wd; hitSphere = null; hitBot = null; }
+
+      if (hitSphere && hitBot) {
+        hitBot.hp -= LG_DPS * LG_TICK * hitSphere.mul;
+        hitBot.hitFlash = 0.1;
+        if (hitBot.hp <= 0) killBot(hitBot);
+      }
+    }
+
+    // Beam Visual (aktualisiert jeden Frame)
+    const dir = getCamForward();
+    const ex = player.x, ey = player.y - CFG.playerHeight + CFG.eyeHeight, ez = player.z;
+    let bDist = worldTrace(ex,ey,ez, dir.x,dir.y,dir.z, LG_RANGE);
+    for (const b of bots) {
+      if (!b.alive) continue;
+      const spheres = getHitSpheres(b.x, b.y, b.z);
+      const hit = raySphereHit(ex,ey,ez, dir.x,dir.y,dir.z, spheres);
+      if (hit && hit.t < bDist) bDist = hit.t;
+    }
+    const hx = ex+dir.x*bDist, hy = ey+dir.y*bDist, hz = ez+dir.z*bDist;
+
+    if (lgBeamMesh) scene.remove(lgBeamMesh);
+    const pts = [new THREE.Vector3(ex,ey,ez), new THREE.Vector3(hx,hy,hz)];
+    const bgeo = new THREE.BufferGeometry().setFromPoints(pts);
+    lgBeamMesh = new THREE.Line(bgeo, new THREE.LineBasicMaterial({ color: 0x4dc9f6, linewidth: 3 }));
+    scene.add(lgBeamMesh);
+  } else {
+    if (lgFiring) { stopLGSound(); lgFiring = false; }
+    if (lgBeamMesh) { scene.remove(lgBeamMesh); lgBeamMesh = null; }
+    lgLastTick = 0;
   }
 }
 
@@ -1544,16 +1784,34 @@ function physicsTick(dt) {
   // Jump
   doJump();
 
+  // Warsow Wall Jump (E-Taste)
+  if (wallJumpCD > 0) wallJumpCD -= dt;
+  if (settings.wallJump && keys.e && !player.onGround && wallJumpCD <= 0) {
+    const wall = getNearestWallNormal();
+    if (wall) {
+      // Push weg von der Wand
+      player.vx = wall.nx * WJ_PUSH;
+      player.vz = wall.nz * WJ_PUSH;
+      player.vy = WJ_UP;
+      wallJumpCD = WJ_COOLDOWN;
+      playSound('jump', 0.6);
+    }
+  }
+
   // Waffe feuern
   if (firePressed) {
     if (settings.mode === 'instagib') fireRail(gameTime);
     else if (settings.mode === 'rocket') fireRocket(gameTime);
     else { // mixed
       if (player.weapon === 'rail') fireRail(gameTime);
+      else if (player.weapon === 'lg') { /* LG handled in updateLG */ }
       else fireRocket(gameTime);
     }
-    firePressed = false;
+    if (!(settings.mode === 'mixed' && player.weapon === 'lg')) firePressed = false;
   }
+
+  // Lightning Gun update
+  updateLG(dt);
 
   // Movement
   const wishdir = getWishDir();
@@ -1582,10 +1840,11 @@ function physicsTick(dt) {
     player.onGround = false;
   }
 
-  // Landing-Sound (Luft → Boden)
+  // Landing-Sound (Luft → Boden) + PK Bhop Timing
   if (player.onGround && !wasOnGround) {
     playSound('land', 0.4);
     footstepDist = 0;
+    if (settings.pkBhop) pkLandTime = gameTime;
   }
 
   // Footsteps (nicht beim Schleichen)
@@ -1666,14 +1925,149 @@ function physicsTick(dt) {
   updateRockets(dt);
   updateBeams(dt);
   updateGibs(dt);
+  updateHearts(dt);
 
   // All bots updaten
   for (const b of bots) updateBot(b, dt);
 }
 
+// === HERZ-WAFFE UPDATE ===
+function updateHearts(dt) {
+  // Dauerfeuer wenn E gehalten
+  if (heartKeyDown && pointerLocked) {
+    heartCooldown -= dt;
+    if (heartCooldown <= 0) {
+      fireHeart();
+      heartCooldown = HEART_FIRE_RATE;
+    }
+  } else {
+    heartCooldown = 0;
+  }
+
+  // Fliegende Herzen bewegen + Kollision
+  for (let i = hearts.length - 1; i >= 0; i--) {
+    const h = hearts[i];
+    h.life -= dt;
+    if (h.life <= 0) {
+      scene.remove(h.mesh);
+      hearts.splice(i, 1);
+      continue;
+    }
+    // Bewegen
+    const nx = h.mesh.position.x + h.vx * dt;
+    const ny = h.mesh.position.y + h.vy * dt;
+    const nz = h.mesh.position.z + h.vz * dt;
+
+    // Poster-Treffer prüfen (Raycaster gegen Poster-Planes)
+    let hit = false;
+    const hdir = new THREE.Vector3(h.vx, h.vy, h.vz).normalize();
+    const hrc = new THREE.Raycaster(h.mesh.position, hdir, 0, Math.sqrt(h.vx*h.vx+h.vy*h.vy+h.vz*h.vz) * dt + 5);
+    const posterHits = hrc.intersectObjects(posterMeshes);
+    if (posterHits.length > 0) {
+      hit = true;
+      loveCounter++;
+      document.getElementById('loveCount').textContent = loveCounter;
+      document.getElementById('loveHud').style.opacity = 1;
+      // Herz flat auf Poster kleben (gleiche Rotation wie Poster + leicht davor)
+      const ph = posterHits[0];
+      const poster = ph.object;
+      const stuck = new THREE.Mesh(heartGeo, heartMat);
+      stuck.position.copy(ph.point);
+      // Normale des Posters = Richtung davor
+      const pNormal = ph.face.normal.clone().applyQuaternion(poster.quaternion);
+      stuck.position.addScaledVector(pNormal, 1); // 1 unit vor dem Poster
+      stuck.rotation.copy(poster.rotation);
+      scene.add(stuck);
+      stuckHearts.push(stuck);
+      scene.remove(h.mesh);
+      hearts.splice(i, 1);
+    }
+
+    // Wand-Kollision prüfen (AABB)
+    if (!hit) {
+    for (const b of colBoxes) {
+      if (nx >= b.x1 && nx <= b.x2 && ny >= b.bottom && ny <= b.top && nz >= b.z1 && nz <= b.z2) {
+        hit = true;
+        // Herz an Wand kleben lassen
+        const stuck = h.mesh.clone();
+        stuck.position.set(h.mesh.position.x, h.mesh.position.y, h.mesh.position.z);
+        const spd = Math.sqrt(h.vx*h.vx + h.vy*h.vy + h.vz*h.vz);
+        if (spd > 0) {
+          stuck.position.x -= (h.vx/spd) * 2;
+          stuck.position.y -= (h.vy/spd) * 2;
+          stuck.position.z -= (h.vz/spd) * 2;
+        }
+        scene.add(stuck);
+        stuckHearts.push(stuck);
+        scene.remove(h.mesh);
+        hearts.splice(i, 1);
+        break;
+      }
+    }
+    }
+    if (!hit) {
+      h.mesh.position.set(nx, ny, nz);
+    }
+  }
+}
+
 // === HUD ===
 const hudEl = document.getElementById('hud');
 const debugEl = document.getElementById('debug');
+
+const wpnCanvas = document.getElementById('wpnIcon');
+const wpnCtx = wpnCanvas.getContext('2d');
+
+function drawWeaponIcon() {
+  const c = wpnCtx, w = 80, h = 80;
+  c.clearRect(0, 0, w, h);
+
+  let wpnName = 'rocket';
+  if (settings.mode === 'instagib') wpnName = 'rail';
+  else if (settings.mode === 'mixed') wpnName = player.weapon || 'rocket';
+
+  c.lineWidth = 2.5;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+
+  if (wpnName === 'rocket') {
+    c.strokeStyle = '#f4a842';
+    // Rocket body
+    c.beginPath();
+    c.moveTo(15, 50); c.lineTo(55, 50); c.lineTo(65, 40); c.lineTo(55, 30); c.lineTo(15, 30); c.closePath();
+    c.stroke();
+    // Fins
+    c.beginPath(); c.moveTo(15, 30); c.lineTo(8, 20); c.lineTo(15, 25); c.stroke();
+    c.beginPath(); c.moveTo(15, 50); c.lineTo(8, 60); c.lineTo(15, 55); c.stroke();
+    // Exhaust
+    c.beginPath(); c.moveTo(15, 35); c.lineTo(5, 40); c.lineTo(15, 45); c.stroke();
+    // Nose
+    c.fillStyle = '#f4a842'; c.beginPath(); c.arc(65, 40, 3, 0, Math.PI*2); c.fill();
+  } else if (wpnName === 'rail') {
+    c.strokeStyle = '#2abfbf';
+    // Long barrel
+    c.beginPath(); c.moveTo(10, 40); c.lineTo(70, 40); c.stroke();
+    // Scope
+    c.beginPath(); c.moveTo(45, 40); c.lineTo(45, 28); c.lineTo(55, 28); c.stroke();
+    // Grip
+    c.beginPath(); c.moveTo(25, 40); c.lineTo(20, 55); c.lineTo(30, 55); c.stroke();
+    // Muzzle
+    c.fillStyle = '#2abfbf'; c.beginPath(); c.arc(70, 40, 3, 0, Math.PI*2); c.fill();
+  } else if (wpnName === 'lg') {
+    c.strokeStyle = '#4dc9f6';
+    // Gun body
+    c.beginPath(); c.moveTo(10, 38); c.lineTo(50, 38); c.lineTo(50, 42); c.lineTo(10, 42); c.closePath(); c.stroke();
+    // Nozzle
+    c.beginPath(); c.moveTo(50, 34); c.lineTo(60, 34); c.lineTo(60, 46); c.lineTo(50, 46); c.stroke();
+    // Lightning bolt from nozzle
+    c.strokeStyle = '#4dc9f6'; c.lineWidth = 3;
+    c.beginPath(); c.moveTo(62, 40); c.lineTo(67, 35); c.lineTo(64, 40); c.lineTo(70, 33); c.stroke();
+    c.lineWidth = 2.5;
+    // Grip
+    c.strokeStyle = '#4dc9f6';
+    c.beginPath(); c.moveTo(25, 42); c.lineTo(20, 55); c.lineTo(32, 55); c.stroke();
+  }
+}
 
 function updateHUD() {
   const speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
@@ -1692,15 +2086,19 @@ function updateHUD() {
   let wpn;
   if (settings.mode === 'instagib') wpn = '<span style="color:#2abfbf">INSTAGIB</span>';
   else if (settings.mode === 'mixed') {
-    const cur = player.weapon === 'rail' ? '<span style="color:#2abfbf">RAIL</span>' : '<span style="color:#f4a842">RL</span>';
-    wpn = '<span style="color:#f0ece6">MIXED</span> ' + cur + ' <span style="color:#3a6080">[Q/R]</span>';
+    const names = { rocket: '<span style="color:#f4a842">RL</span>', rail: '<span style="color:#2abfbf">RAIL</span>', lg: '<span style="color:#4dc9f6">LG</span>' };
+    wpn = '<span style="color:#f0ece6">MIXED</span> ' + (names[player.weapon]||names.rocket) + ' <span style="color:#3a6080">[Q/R/C]</span>';
   } else wpn = '<span style="color:#f4a842">ROCKET</span>';
+  drawWeaponIcon();
+  let extra = '';
+  if (settings.pkBhop && pkChain > 0) extra += ` | <span style="color:#f4a842">BHOP x${pkChain}</span>`;
   debugEl.innerHTML =
     `HP: <span style="color:${player.hp>50?'#2abfbf':player.hp>25?'#f4a842':'#e86a7a'}">${Math.round(player.hp)}</span> | ` +
-    wpn + ` | Frags: <span style="color:#2abfbf">${playerFrags}</span>:<span style="color:#e86a7a">${botFrags}</span>`;
+    wpn + ` | Frags: <span style="color:#2abfbf">${playerFrags}</span>:<span style="color:#e86a7a">${botFrags}</span>` + extra;
   // Crosshair color follows active weapon
-  const chc = (settings.mode === 'instagib' || (settings.mode === 'mixed' && player.weapon === 'rail'))
-    ? 'rgba(42,191,191,0.9)' : 'rgba(240,236,230,0.8)';
+  let chc = 'rgba(240,236,230,0.8)';
+  if (settings.mode === 'instagib' || (settings.mode === 'mixed' && player.weapon === 'rail')) chc = 'rgba(42,191,191,0.9)';
+  else if (settings.mode === 'mixed' && player.weapon === 'lg') chc = 'rgba(77,201,246,0.9)';
   crosshairEl.style.setProperty('--ch-color', chc);
 }
 
