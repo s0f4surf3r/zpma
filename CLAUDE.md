@@ -1,4 +1,4 @@
-# Space CPMA
+# ZPMA
 
 3D CPMA-Defrag Bewegungs-Prototyp im Browser (Three.js).
 
@@ -160,9 +160,8 @@ stepUp = 22                 // Auto-Step-Up Höhe (Quake: 18)
 ### Teleporter (4 Stück, aus BSP-Entities)
 - Trigger: AABB-Volumen mit ±20 Y-Toleranz
 - Cooldown: 0.5s, Speed beibehalten + Richtung an Teleporter-Yaw
-- **Visuals**: Wurmloch-Event-Horizon (rechteckige Swirl-Textur, zwei gegenläufige Schichten)
-  - Prozedurale Canvas-Textur pro Portal (Seitenverhältnis angepasst)
-  - UV-Scroll-Animation für fließende Bewegung
+- **Visuals**: Portal-Textur (`assets/portal.jpg`) als Event-Horizon
+  - Zwei gegenläufige Schichten mit UV-Scroll-Animation
   - Pulsierendes Teal-PointLight
   - Automatische Orientierung (schmale Achse = Durchgangsrichtung)
 
@@ -230,9 +229,10 @@ stepUp = 22                 // Auto-Step-Up Höhe (Quake: 18)
 - `#f0ece6` (light) → Menu-Titel, Crosshair default
 
 ## Dateien
-- `space-cpma.html` — Das komplette Spiel (single-file)
+- `zpma.html` — Das komplette Spiel (single-file)
 - `assets/map.bin` — BSP-Dreiecksmesh binary (81KB)
 - `assets/frame.jpg` — Goldrahmen-Bild für 9-Slice Poster-Rahmen
+- `assets/portal.jpg` — Teleporter Portal-Textur
 - `assets/sounds/` — 15 WAV-Dateien (12 aus Q3 + machgun + ric1-3)
 - `assets/skybox/` — 6 iceflow JPGs aus cpm3a
 - `assets/poster3-10.jpg` — 8 Wand-Poster Bilder

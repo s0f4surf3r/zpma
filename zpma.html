@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>Space CPMA – Defrag Prototyp</title>
+<title>ZPMA – Defrag Prototyp</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #0a1628; overflow: hidden; cursor: none; }
@@ -25,14 +25,14 @@ canvas { display: block; width: 100vw; height: 100vh; }
 
 #crosshair {
   position: fixed; top: 50%; left: 50%;
-  width: 20px; height: 20px; transform: translate(-50%, -50%);
+  width: 0; height: 0;
   pointer-events: none; z-index: 10;
 }
-#crosshair::before, #crosshair::after {
-  content: ''; position: absolute; background: var(--ch-color, rgba(240,236,230,0.8));
-}
-#crosshair::before { width: 2px; height: 20px; left: 9px; top: 0; }
-#crosshair::after  { width: 20px; height: 2px; top: 9px; left: 0; }
+.ch { position: absolute; background: var(--ch-color, rgba(240,236,230,0.8)); }
+.ch-t { width: 2px; height: 8px; left: -1px; bottom: var(--ch-gap, 2px); }
+.ch-b { width: 2px; height: 8px; left: -1px; top: var(--ch-gap, 2px); }
+.ch-l { height: 2px; width: 8px; top: -1px; right: var(--ch-gap, 2px); }
+.ch-r { height: 2px; width: 8px; top: -1px; left: var(--ch-gap, 2px); }
 
 #overlay {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -42,8 +42,10 @@ canvas { display: block; width: 100vw; height: 100vh; }
 }
 #overlay.hidden { display: none; }
 .menu-title {
-  font-size: 42px; color: #f0ece6; font-weight: bold;
-  text-shadow: 0 0 16px rgba(42,191,191,0.6);
+  font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  font-size: 96px; color: #f0ece6; font-weight: 900;
+  letter-spacing: 16px;
+  text-shadow: 0 0 30px rgba(42,191,191,0.7), 0 0 60px rgba(42,191,191,0.3), 0 2px 0 rgba(0,0,0,0.4);
   margin-bottom: 36px;
 }
 .menu-row {
@@ -87,10 +89,10 @@ canvas { display: block; width: 100vw; height: 100vh; }
   <div style="font-size:15px;font-weight:bold;color:#e86a7a;text-shadow:0 0 8px rgba(232,106,122,0.4);letter-spacing:5px;">LOVE 2 ZOE</div>
 </div>
 <canvas id="wpnIcon" width="80" height="80" style="position:fixed;bottom:20px;right:20px;width:80px;height:80px;pointer-events:none;z-index:10;opacity:0.85;"></canvas>
-<div id="crosshair"></div>
+<div id="crosshair"><div class="ch ch-t"></div><div class="ch ch-b"></div><div class="ch ch-l"></div><div class="ch ch-r"></div></div>
 <div id="dmgflash"></div>
 <div id="overlay">
-  <div class="menu-title">SPACE CPMA</div>
+  <div class="menu-title">ZPMA</div>
   <div class="menu-row">
     <span class="menu-label">MODE</span>
     <button class="menu-btn" id="btn-rocket">ROCKET</button>
@@ -770,6 +772,18 @@ fetch('assets/map.bin').then(r => r.arrayBuffer()).then(buf => {
   floorMatRef = floorMat; marbleTexRef = marbleTex;
 
   console.log('Map split: ' + (wallVerts.length/3) + ' wall verts, ' + (floorVerts.length/3) + ' floor verts');
+
+  // Visuelle Schacht-Abdeckungen: gleiche Material wie Boden
+  if (window._shaftCaps && window._shaftCaps.length > 0) {
+    const capGeo = new THREE.PlaneGeometry(16, 16);
+    for (const c of window._shaftCaps) {
+      const mesh = new THREE.Mesh(capGeo, floorMat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(c.x, c.top + 0.5, c.z);
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+    }
+  }
 });
 
 // === TELEPORTERS (generous triggers — walk-through doorways) ===
@@ -789,114 +803,114 @@ const teleporters = [
     dx:-176, dy:-200+CFG.playerHeight, dz:208, yaw:Math.PI }
 ];
 
-// Teleporter visuals — Wurmloch-Horizont als rechteckige Fläche in der Türöffnung
+// Teleporter visuals — nur wabernder Event Horizon (kein Rahmen)
 const tpVisuals = [];
 
-// Prozedurale Wurmloch-Textur (Rechteck, Swirl-Muster)
-function createWormholeTexture(w, h) {
+// Wabernder Event Horizon — animierte Canvas-Textur
+const EH_SIZE = 128;
+function createEventHorizon() {
   const cv = document.createElement('canvas');
-  cv.width = w; cv.height = h;
+  cv.width = cv.height = EH_SIZE;
   const ctx = cv.getContext('2d');
-  const id = ctx.createImageData(w, h);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  return { cv, ctx, tex };
+}
+
+const ehHash = (a,b) => { let v = (a|0)*374761393+(b|0)*668265263; v=(v^(v>>13))*1274126177; return ((v^(v>>16))&0xffff)/65535; };
+
+function updateEventHorizonTexture(eh, time) {
+  const w = EH_SIZE, h = EH_SIZE;
+  const id = eh.ctx.createImageData(w, h);
   const d = id.data;
-  const hash = (a,b) => { let v = (a|0)*374761393+(b|0)*668265263; v=(v^(v>>13))*1274126177; return ((v^(v>>16))&0xffff)/65535; };
+  const t = time * 0.8;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      // Normalisierte Koordinaten -1..1
-      const nx = (x/w) * 2 - 1, ny = (y/h) * 2 - 1;
+      const nx = (x/w)*2-1, ny = (y/h)*2-1;
       const dist = Math.sqrt(nx*nx + ny*ny);
       const angle = Math.atan2(ny, nx);
-      // Spirale + Wellen
-      const spiral = angle + dist * 5.0;
-      const wave1 = Math.sin(spiral * 3.0) * 0.5 + 0.5;
-      const wave2 = Math.sin(spiral * 7.0 + 1.5) * 0.5 + 0.5;
-      const wave3 = Math.sin(nx * 4.0 + ny * 6.0) * 0.5 + 0.5;
-      const noise = hash(Math.floor(x*0.25), Math.floor(y*0.25)) * 0.2;
-      // Radiales Fading: Mitte hell, Rand dunkler
-      const radFade = Math.max(0, 1.0 - dist * 0.5);
-      // Randausblendung (rechteckig, weiche Kanten)
-      const edgeX = 1.0 - Math.pow(Math.abs(nx), 6);
-      const edgeY = 1.0 - Math.pow(Math.abs(ny), 6);
-      const edge = edgeX * edgeY;
-      const v = (wave1 * 0.3 + wave2 * 0.25 + wave3 * 0.15 + noise) * radFade;
+
+      // Wabernde Spirale: zeitabhängig
+      const spiral = angle + dist * 4.0 + t;
+      const ripple1 = Math.sin(spiral * 3.0 + t * 1.2) * 0.5 + 0.5;
+      const ripple2 = Math.sin(spiral * 5.0 - t * 0.8 + 2.0) * 0.5 + 0.5;
+      const ripple3 = Math.sin(dist * 8.0 - t * 2.5) * 0.5 + 0.5; // radiale Wellen
+
+      // Sich bewegendes Rauschen
+      const noiseX = Math.floor(x * 0.15 + Math.sin(t + y * 0.1) * 3);
+      const noiseY = Math.floor(y * 0.15 + Math.cos(t * 0.7 + x * 0.1) * 3);
+      const noise = ehHash(noiseX, noiseY) * 0.25;
+
+      // Radiales Fading: heller Kern
+      const radFade = Math.max(0, 1.0 - dist * 0.55);
+      const coreGlow = Math.exp(-dist * dist * 3.0) * 0.4;
+
+      const v = (ripple1 * 0.3 + ripple2 * 0.25 + ripple3 * 0.2 + noise) * radFade + coreGlow;
+
+      // Farbe: tiefes Blau bis helles Cyan/Weiß im Kern
       const i = (y * w + x) * 4;
-      d[i]   = Math.floor(Math.max(0, Math.min(255, (0.02 + v * 0.12) * 255)));
-      d[i+1] = Math.floor(Math.max(0, Math.min(255, (0.20 + v * 0.55) * 255)));
-      d[i+2] = Math.floor(Math.max(0, Math.min(255, (0.30 + v * 0.60) * 255)));
-      d[i+3] = Math.floor(edge * 230);
+      d[i]   = Math.min(255, Math.floor((0.05 + v * 0.35 + coreGlow * 0.8) * 255)); // R
+      d[i+1] = Math.min(255, Math.floor((0.15 + v * 0.55 + coreGlow * 0.9) * 255)); // G
+      d[i+2] = Math.min(255, Math.floor((0.30 + v * 0.65 + coreGlow * 0.7) * 255)); // B
+      d[i+3] = 255;
     }
   }
-  ctx.putImageData(id, 0, 0);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  return tex;
+  eh.ctx.putImageData(id, 0, 0);
+  eh.tex.needsUpdate = true;
 }
 
-for (const tp of teleporters) {
-  const cx = (tp.x1+tp.x2)/2, cy = (tp.y1+tp.y2)/2, cz = (tp.z1+tp.z2)/2;
-  const tw = tp.x2-tp.x1, th = tp.y2-tp.y1, td = tp.z2-tp.z1;
-  const facesZ = td < tw; // schmale Seite = Durchgangsrichtung
-  const portalW = facesZ ? tw : td;
-  const portalH = th;
+// Explizite Portal-Visuals: pro Portal individuell positioniert und dimensioniert
+const PORTAL_W = 100, PORTAL_H = 140; // Default-Größe
+const portalDefs = [
+  // sgtele: exakt vermessen aus POSTER-SPOT Ecken an äußerer Wand (z:944)
+  { x:600, y:-160, z:944, facesZ:true, w:115, h:129 },
+  // uppertele: Tür Richtung Z, äußere Wand z:-320, Ecken x:1160..1273, y:-351..-224
+  { x:1216, y:-288, z:-320, facesZ:true, w:113, h:127 },
+  // ra: Tür Richtung Z, äußere Wand z:-608, Ecken x:-24..89, y:64..192
+  { x:32, y:128, z:-608, facesZ:true, w:113, h:128 },
+  // mh: Tür Richtung X, äußere Wand x:-640, Ecken z:758..873, y:-16..113
+  { x:-640, y:49, z:816, facesZ:false, w:115, h:129 },
+];
 
-  // Eigene Textur pro Portal (Seitenverhältnis angepasst)
-  const tex = createWormholeTexture(256, Math.round(256 * portalH / portalW));
-
-  // Event Horizon — flache Plane die die Türöffnung füllt
-  const horizonMat = new THREE.MeshBasicMaterial({
-    map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false
+for (const pd of portalDefs) {
+  // Event Horizon — individuelle Portalgröße, kein Rahmen
+  const pw = pd.w || PORTAL_W, ph = pd.h || PORTAL_H;
+  const eh = createEventHorizon();
+  const ehMat = new THREE.MeshBasicMaterial({
+    map: eh.tex, side: THREE.DoubleSide, depthWrite: false
   });
-  const horizon = new THREE.Mesh(new THREE.PlaneGeometry(portalW, portalH), horizonMat);
-  horizon.position.set(cx, cy, cz);
-  if (!facesZ) horizon.rotation.y = Math.PI / 2;
+  const horizon = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), ehMat);
+  horizon.position.set(pd.x, pd.y, pd.z);
+  if (pd.facesZ) horizon.position.z += 1; else horizon.position.x += 1;
+  if (!pd.facesZ) horizon.rotation.y = Math.PI / 2;
+  horizon.renderOrder = 2;
   scene.add(horizon);
 
-  // Zweite Schicht leicht versetzt, gegenläufig animiert
-  const horizonMat2 = new THREE.MeshBasicMaterial({
-    map: tex, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false
-  });
-  const horizon2 = new THREE.Mesh(new THREE.PlaneGeometry(portalW * 0.95, portalH * 0.95), horizonMat2);
-  horizon2.position.set(cx, cy, cz);
-  if (facesZ) horizon2.position.z += 3; else horizon2.position.x += 3;
-  if (!facesZ) horizon2.rotation.y = Math.PI / 2;
-  scene.add(horizon2);
-
   // Licht
-  const light = new THREE.PointLight(0x2abfbf, 2.0, 200);
-  light.position.set(cx, cy, cz);
+  const light = new THREE.PointLight(0x3ad0e0, 2.5, 250);
+  light.position.set(pd.x, pd.y, pd.z);
   scene.add(light);
 
-  tpVisuals.push({ horizon, horizon2, tex, facesZ, light });
+  tpVisuals.push({ horizon, eh, facesZ: pd.facesZ, light });
 }
 
-// Teleporter-Animation: UV-Offset für Swirl-Bewegung
+// Teleporter-Animation: Event Horizon wabern lassen
+let ehFrameCounter = 0;
 function updateTeleporterVisuals(time) {
+  ehFrameCounter++;
   for (const tv of tpVisuals) {
-    // UV scrollen für fließende Bewegung
-    tv.tex.offset.x = Math.sin(time * 0.3) * 0.15;
-    tv.tex.offset.y = time * 0.08;
-    tv.tex.needsUpdate = false; // offset ändert sich, kein Canvas-Update nötig
-
-    // Zweite Schicht gegenläufig
-    tv.horizon2.material.map.offset.x = Math.cos(time * 0.4) * 0.1;
-    tv.horizon2.material.map.offset.y = -time * 0.06;
-
+    // Event Horizon nur alle 3 Frames updaten (Performance)
+    if (ehFrameCounter % 3 === 0) {
+      updateEventHorizonTexture(tv.eh, time);
+    }
     // Licht pulsieren
-    tv.light.intensity = 1.8 + Math.sin(time * 2.5) * 0.6;
+    tv.light.intensity = 2.0 + Math.sin(time * 2.5) * 0.8;
+    tv.light.color.setHSL(0.52 + Math.sin(time * 1.5) * 0.03, 0.8, 0.55);
   }
 }
 
-// === LAVA ZONES ===
-// Bot No-Go Zone: gesamter tiefer Pit-Bereich (Bots vermeiden die Area komplett)
-const botNoGoZones = [
-  { x1: 560, x2: 850, z1: -200, z2: 400, yMax: -250 }
-];
-function isInBotNoGo(x, y, z) {
-  for (const nz of botNoGoZones) {
-    if (x >= nz.x1 && x <= nz.x2 && z >= nz.z1 && z <= nz.z2 && y < nz.yMax) return true;
-  }
-  return false;
-}
+// Bot No-Go Zones entfernt — Bots dürfen überall hin
 
 // === JUMP PADS (from BSP entities) ===
 let jpCD = 0;
@@ -1264,15 +1278,22 @@ function getFloorHeight(x, z, entityY) {
   const feetY = (entityY !== undefined ? entityY : player.y) - CFG.playerHeight;
   const isBot = entityY !== undefined;
   let best = getFloorAt(x, feetY, z);
-  // Schmale Schächte überbrücken: checke ringsum → über Lücken hinweg gleiten
-  // Bots: doppelter Radius damit sie nicht in Schächte fallen
-  if (best < -9000) {
-    const r = isBot ? CFG.playerRadius * 2.5 : CFG.playerRadius;
+  const noFloor = best < -9000;
+  // Bots: IMMER Nachbarn prüfen um Schächte zu erkennen
+  // Spieler: nur wenn kein Boden gefunden
+  if (noFloor || isBot) {
+    const r = isBot ? 50 : CFG.playerRadius;
     const samples = [[r,0],[-r,0],[0,r],[0,-r],[r*0.7,r*0.7],[-r*0.7,r*0.7],[r*0.7,-r*0.7],[-r*0.7,-r*0.7]];
+    let maxNearby = -9999, higherCount = 0;
     for (const [dx, dz] of samples) {
       const h = getFloorAt(x + dx, feetY, z + dz);
-      if (h > best) best = h;
+      if (h > maxNearby) maxNearby = h;
+      if (h > best + 40) higherCount++;
     }
+    // Kein Boden → nächsten Nachbar-Boden nutzen
+    if (noFloor && maxNearby > best) best = maxNearby;
+    // Bot in Schacht (Boden existiert aber ≥6/8 Nachbarn viel höher) → überbrücken
+    else if (isBot && higherCount >= 6 && maxNearby > best) best = maxNearby;
   }
   return best;
 }
@@ -1431,16 +1452,16 @@ function rocketExplode(r) {
     for (const b of bots) {
       if (!b.alive) continue;
       const spheres = getHitSpheres(b.x, b.y, b.z);
-      let bestDist = Infinity, bestMul = 1;
+      let bestDist = Infinity, bestMul = 1, bestName = 'body';
       for (const s of spheres) {
         const sdx = s.cx-r.x, sdy = s.cy-r.y, sdz = s.cz-r.z;
         const sd = Math.sqrt(sdx*sdx+sdy*sdy+sdz*sdz) - s.r;
-        if (sd < bestDist) { bestDist = sd; bestMul = s.mul; }
+        if (sd < bestDist) { bestDist = sd; bestMul = s.mul; bestName = s.name; }
       }
       if (bestDist < CFG.rk_radius) {
         const dmg = 100 * bestMul * (1 - Math.max(0,bestDist) / CFG.rk_radius);
         b.hp -= dmg;
-        b.hitFlash = 0.15;
+        b.hitZone = bestName; b.hitFlash = 0.15;
         playSound('hit', 0.7);
         const bcx = b.x-r.x, bcy = (b.y-CFG.playerHeight/2)-r.y, bcz = b.z-r.z;
         const bdist = Math.sqrt(bcx*bcx+bcy*bcy+bcz*bcz);
@@ -1622,7 +1643,7 @@ function fireRail(time) {
     } else {
       hitBot.hp -= 80 * hitSphere.mul;
     }
-    hitBot.hitFlash = 0.3;
+    hitBot.hitZone = hitSphere.name; hitBot.hitFlash = 0.3;
     playSound('hit', 1.0);
     if (hitBot.hp <= 0) killBot(hitBot);
   }
@@ -1742,7 +1763,7 @@ function updateLG(dt) {
 
       if (hitSphere && hitBot) {
         hitBot.hp -= LG_DPS * LG_TICK * hitSphere.mul;
-        hitBot.hitFlash = 0.1;
+        hitBot.hitZone = hitSphere.name; hitBot.hitFlash = 0.1;
         if (hitBot.hp <= 0) killBot(hitBot);
       }
       if (hitWall && Math.random() < 0.35) {
@@ -1954,7 +1975,7 @@ function fireM4(time) {
   if (hitSphere && hitBot) {
     const dmg = M4_DAMAGE * hitSphere.mul;
     hitBot.hp -= dmg;
-    hitBot.hitFlash = 0.15;
+    hitBot.hitZone = hitSphere.name; hitBot.hitFlash = 0.15;
     playSound('hit', 0.5);
     if (hitBot.hp <= 0) killBot(hitBot);
   }
@@ -2031,20 +2052,25 @@ const botBodyEdgeGeo = new THREE.EdgesGeometry(botBodyGeo);
 const botLegsEdgeGeo = new THREE.EdgesGeometry(botLegsGeo);
 
 function createBotVisual() {
-  const fillMat = new THREE.MeshBasicMaterial({ color: 0xff2050, transparent: true, opacity: 0.65 });
-  const edgeMat = new THREE.LineBasicMaterial({ color: 0xff80a0 });
   const hpMat = new THREE.MeshBasicMaterial({ color: 0x2abfbf, side: THREE.DoubleSide });
   const group = new THREE.Group();
-  const h = new THREE.Mesh(botHeadGeo, fillMat); h.position.y = 20; group.add(h);
-  const he = new THREE.LineSegments(botHeadEdgeGeo, edgeMat); he.position.y = 20; group.add(he);
-  group.add(new THREE.Mesh(botBodyGeo, fillMat));
-  group.add(new THREE.LineSegments(botBodyEdgeGeo, edgeMat));
-  const l = new THREE.Mesh(botLegsGeo, fillMat); l.position.y = -18; group.add(l);
-  const le = new THREE.LineSegments(botLegsEdgeGeo, edgeMat); le.position.y = -18; group.add(le);
+  const zones = {};
+  const parts = [
+    { name: 'head', geo: botHeadGeo, edgeGeo: botHeadEdgeGeo, y: 20 },
+    { name: 'body', geo: botBodyGeo, edgeGeo: botBodyEdgeGeo, y: 0 },
+    { name: 'legs', geo: botLegsGeo, edgeGeo: botLegsEdgeGeo, y: -18 },
+  ];
+  for (const p of parts) {
+    const fill = new THREE.MeshBasicMaterial({ color: 0xff2050, transparent: true, opacity: 0.65 });
+    const edge = new THREE.LineBasicMaterial({ color: 0xff80a0 });
+    const mesh = new THREE.Mesh(p.geo, fill); mesh.position.y = p.y; group.add(mesh);
+    const edgeMesh = new THREE.LineSegments(p.edgeGeo, edge); edgeMesh.position.y = p.y; group.add(edgeMesh);
+    zones[p.name] = { fill, edge, mesh, edgeMesh };
+  }
   const hp = new THREE.Mesh(botHPGeo, hpMat); hp.position.y = 34; group.add(hp);
-  group.scale.set(1.2, 1.2, 1.2); // 20% größer
+  group.scale.set(1.2, 1.2, 1.2);
   scene.add(group);
-  return { group, fillMat, edgeMat, hpMat, hpMesh: hp };
+  return { group, hpMat, hpMesh: hp, zones };
 }
 
 const bots = [];
@@ -2055,7 +2081,7 @@ function createBot() {
     x:0, y:0, z:0, vx:0, vy:0, vz:0, yaw:0,
     onGround:false, hp:80, alive:true, target:null,
     fireCD: 2 + Math.random()*2, respawnCD:0, seesPlayer:false,
-    hitFlash: 0, stuckTime: 0, lastX: 0, lastZ: 0, vis
+    hitFlash: 0, hitZone: 'body', stuckTime: 0, lastX: 0, lastZ: 0, vis
   };
 }
 
@@ -2076,18 +2102,21 @@ const gibGeos = [
   new THREE.SphereGeometry(13, 10, 8),  // body
   new THREE.SphereGeometry(10, 8, 6)    // legs
 ];
+const fragGeo = new THREE.TetrahedronGeometry(3);
+const ringGeo = new THREE.TorusGeometry(5, 2, 8, 24);
 
 function spawnGibs(x, y, z) {
-  const offsets = [20, 0, -18]; // y-offsets from group center
+  const cy = y - CFG.playerHeight*0.5;
+  const offsets = [20, 0, -18];
+  // 3 Hauptteile (Kopf, Body, Legs)
   for (let i = 0; i < 3; i++) {
     const mat = new THREE.MeshBasicMaterial({ color: 0xe86a7a, transparent: true, opacity: 0.7 });
     const mesh = new THREE.Mesh(gibGeos[i], mat);
     const edgeMat = new THREE.LineBasicMaterial({ color: 0xf4a842, transparent: true, opacity: 1.0 });
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(gibGeos[i]), edgeMat);
-    mesh.position.set(x, y - CFG.playerHeight*0.5 + offsets[i], z);
+    mesh.position.set(x, cy + offsets[i], z);
     edges.position.copy(mesh.position);
     scene.add(mesh); scene.add(edges);
-    // Random outward velocity
     const ang = Math.random() * Math.PI * 2;
     const upBias = i === 0 ? 250 : i === 2 ? -50 : 100;
     gibs.push({
@@ -2100,10 +2129,40 @@ function spawnGibs(x, y, z) {
       life: 1.5, maxLife: 1.5
     });
   }
-  // Big flash
+  // 12 kleine Fragmente — fliegen in alle Richtungen
+  for (let i = 0; i < 12; i++) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xe86a7a, transparent: true, opacity: 0.8 });
+    const mesh = new THREE.Mesh(fragGeo, mat);
+    const ang = Math.random() * Math.PI * 2;
+    const elev = (Math.random() - 0.5) * Math.PI;
+    const speed = 200 + Math.random() * 300;
+    mesh.position.set(x + (Math.random()-0.5)*10, cy + (Math.random()-0.5)*30, z + (Math.random()-0.5)*10);
+    scene.add(mesh);
+    gibs.push({
+      mesh, mat, edges: null, edgeMat: null,
+      x: mesh.position.x, y: mesh.position.y, z: mesh.position.z,
+      vx: Math.cos(ang)*Math.cos(elev)*speed,
+      vy: Math.sin(elev)*speed,
+      vz: Math.sin(ang)*Math.cos(elev)*speed,
+      rx: (Math.random()-0.5)*15, rz: (Math.random()-0.5)*15,
+      life: 0.6 + Math.random()*0.5, maxLife: 1.0
+    });
+  }
+  // Shockwave-Ring (expandiert horizontal)
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xf4a842, transparent: true, opacity: 0.7, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.position.set(x, cy, z);
+  ring.rotation.x = Math.PI / 2;
+  scene.add(ring);
+  gibs.push({
+    mesh: ring, mat: ringMat, edges: null, edgeMat: null,
+    x, y: cy, z, vx:0, vy:0, vz:0, rx:0, rz:0,
+    life: 0.5, maxLife: 0.5, isRing: true
+  });
+  // Flash + Licht
   const flashMat = new THREE.MeshBasicMaterial({ color: 0xf4a842, transparent: true, opacity: 0.9 });
   const flash = new THREE.Mesh(new THREE.SphereGeometry(30, 10, 10), flashMat);
-  flash.position.set(x, y - CFG.playerHeight*0.5, z);
+  flash.position.set(x, cy, z);
   scene.add(flash);
   const flashLight = new THREE.PointLight(0xf4a842, 3, 300);
   flashLight.position.copy(flash.position);
@@ -2121,7 +2180,11 @@ function updateGibs(dt) {
     const g = gibs[i];
     g.life -= dt;
     const t = Math.max(0, g.life / g.maxLife);
-    if (g.isFlash) {
+    if (g.isRing) {
+      const s = 1 + (1-t)*10;
+      g.mesh.scale.set(s, s, s);
+      g.mat.opacity = t * 0.7;
+    } else if (g.isFlash) {
       const s = 1 + (1-t)*3;
       g.mesh.scale.set(s, s, s);
       g.mat.opacity = t * 0.9;
@@ -2228,10 +2291,9 @@ function collideBotWalls(bot) {
 }
 
 function spawnBot(b) {
-  // Spawn far from player AND other bots, NICHT in No-Go Zonen
+  // Spawn far from player AND other bots
   let best = SPAWNS[0], bestDist = 0;
   for (const sp of SPAWNS) {
-    if (isInBotNoGo(sp.x, sp.y, sp.z)) continue; // No-Go Spawns überspringen
     let d = Math.sqrt((sp.x-player.x)**2 + (sp.z-player.z)**2);
     for (const ob of bots) {
       if (ob === b || !ob.alive) continue;
@@ -2256,12 +2318,11 @@ function updateBot(b, dt) {
     return;
   }
 
-  // Navigation (No-Go Zonen meiden)
+  // Navigation
   const tdx = b.target.x - b.x, tdz = b.target.z - b.z;
   const tdist = Math.sqrt(tdx*tdx + tdz*tdz);
-  if (tdist < 80 || tdist > 3000 || isInBotNoGo(b.target.x, b.target.y, b.target.z)) {
-    const safe = SPAWNS.filter(s => !isInBotNoGo(s.x, s.y, s.z));
-    b.target = safe[Math.floor(Math.random() * safe.length)] || SPAWNS[0];
+  if (tdist < 80 || tdist > 3000) {
+    b.target = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
   }
 
   const pdx = player.x - b.x, pdz = player.z - b.z;
@@ -2289,17 +2350,6 @@ function updateBot(b, dt) {
     moveX = tdx; moveZ = tdz;
   }
   const moveDist = Math.sqrt(moveX*moveX + moveZ*moveZ);
-
-  // Lava-Vermeidung: wenn Zielrichtung in Lava führt, umdrehen
-  if (moveDist > 1) {
-    const lookAhead = 80;
-    const futX = b.x + (moveX/moveDist) * lookAhead;
-    const futZ = b.z + (moveZ/moveDist) * lookAhead;
-    if (isInBotNoGo(futX, b.y - 50, futZ)) {
-      moveX = -moveX; moveZ = -moveZ;
-      b.target = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
-    }
-  }
 
   if (moveDist > 1) {
     const wantVx = (moveX/moveDist) * spd;
@@ -2379,7 +2429,7 @@ function updateBot(b, dt) {
     b.onGround = false;
   }
 
-  if (b.y < -900 || isInBotNoGo(b.x, b.y, b.z)) { spawnBot(b); return; }
+  if (b.y < -900) { spawnBot(b); return; }
 
   // Bot teleporter check
   if (!b.teleCD || b.teleCD <= 0) {
@@ -2448,18 +2498,28 @@ function updateBot(b, dt) {
     }
   }
 
-  // Hit flash (per-bot materials) — roter Glow-Pulse statt weiß
+  // Hit flash — nur getroffene Zone glüht kräftig rot + Scale-Pulse
   if (b.hitFlash > 0) {
     b.hitFlash -= dt;
-    const t = b.hitFlash / 0.15; // 0→1 normalisiert
-    const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 4); // schnelles Pulsieren
-    b.vis.edgeMat.color.setRGB(1.0, 0.3 + pulse * 0.4, 0.2);
-    b.vis.fillMat.opacity = 0.7 + pulse * 0.25;
-    b.vis.fillMat.color.setRGB(1.0, 0.15 * pulse, 0.1 * pulse);
+    const t = Math.max(0, b.hitFlash / 0.15);
+    const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 5);
+    for (const [name, z] of Object.entries(b.vis.zones)) {
+      if (name === b.hitZone) {
+        z.edge.color.setRGB(1.0, 0.1, 0.05);
+        z.fill.opacity = 0.85 + pulse * 0.15;
+        z.fill.color.setRGB(1.0, 0.08 * pulse, 0.03 * pulse);
+        const s = 1.0 + t * 0.2;
+        z.mesh.scale.set(s, s, s); z.edgeMesh.scale.set(s, s, s);
+      } else {
+        z.edge.color.setHex(0xff80a0); z.fill.opacity = 0.65; z.fill.color.setHex(0xff2050);
+        z.mesh.scale.set(1, 1, 1); z.edgeMesh.scale.set(1, 1, 1);
+      }
+    }
   } else {
-    b.vis.edgeMat.color.setHex(0xff80a0);
-    b.vis.fillMat.opacity = 0.65;
-    b.vis.fillMat.color.setHex(0xff2050);
+    for (const z of Object.values(b.vis.zones)) {
+      z.edge.color.setHex(0xff80a0); z.fill.opacity = 0.65; z.fill.color.setHex(0xff2050);
+      z.mesh.scale.set(1, 1, 1); z.edgeMesh.scale.set(1, 1, 1);
+    }
   }
 
   // HP bar
@@ -2694,7 +2754,7 @@ function updateHearts(dt) {
           hit = true;
           const dmg = 15 * s.mul;
           b.hp -= dmg;
-          b.hitFlash = 0.15;
+          b.hitZone = s.name; b.hitFlash = 0.15;
           playSound('hit', 0.4);
           if (b.hp <= 0) killBot(b);
           // Herz klebt am Bot kurz (visuell)
@@ -2875,9 +2935,16 @@ function updateHUD() {
   let chc = 'rgba(240,236,230,0.8)';
   if (settings.mode === 'instagib' || (settings.mode === 'mixed' && player.weapon === 'rail')) chc = 'rgba(42,191,191,0.9)';
   else if (settings.mode === 'mixed' && player.weapon === 'lg') chc = 'rgba(77,201,246,0.9)';
-  else if (settings.mode === 'mixed' && player.weapon === 'm4') chc = 'rgba(200,208,216,0.9)';
+  else if (settings.mode === 'mixed' && player.weapon === 'm4') chc = 'rgba(0,255,0,0.9)';
   else if (settings.mode === 'mixed' && player.weapon === 'heart') chc = 'rgba(232,106,122,0.9)';
   crosshairEl.style.setProperty('--ch-color', chc);
+  // Dynamic crosshair gap for M4 (CS-style spread indicator)
+  if (settings.mode === 'mixed' && player.weapon === 'm4') {
+    const gap = 3 + m4RecoilIndex * 0.8;
+    crosshairEl.style.setProperty('--ch-gap', gap + 'px');
+  } else {
+    crosshairEl.style.setProperty('--ch-gap', '2px');
+  }
 }
 
 // === GAME LOOP ===
