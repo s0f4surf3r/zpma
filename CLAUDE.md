@@ -182,7 +182,7 @@ stepUp = 22                 // Auto-Step-Up Höhe (Quake: 18)
   - 30 Game-Units Rahmenbreite, 3px/Unit Auflösung
 - **Poster-Spot-Tool**: F-Taste loggt Position + Normalen in Console für neue Poster-Platzierung
 - Poster leicht von Wand versetzt (entlang Normal) gegen z-Fighting bei schrägen Wänden
-- Aktuell 8 Poster (poster3-10.jpg)
+- Aktuell 9 Poster (poster3-11.jpg)
 
 ## Audio-System
 - **Web Audio API**: AudioContext + decodeAudioData + BufferSource + GainNode
@@ -235,7 +235,7 @@ stepUp = 22                 // Auto-Step-Up Höhe (Quake: 18)
 - `assets/portal.jpg` — Teleporter Portal-Textur
 - `assets/sounds/` — 15 WAV-Dateien (12 aus Q3 + machgun + ric1-3)
 - `assets/skybox/` — 6 iceflow JPGs aus cpm3a
-- `assets/poster3-10.jpg` — 8 Wand-Poster Bilder
+- `assets/poster3-11.jpg` — 9 Wand-Poster Bilder
 - `Q3 with CPMA/` — Original-Spieledateien (pak0.pk3, map_cpm3a.pk3, CPMA-Paks)
 - `prompt-cpma-3d-prototyp.md` — Ursprünglicher Design-Prompt
 - `CLAUDE.md` — Diese Datei (Projekt-Konventionen)
