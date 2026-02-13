@@ -99,7 +99,7 @@ stepUp = 22                 // Auto-Step-Up Höhe (Quake: 18)
 - **MIXED** (Default): Alle Waffen, Wechsel mit Q/R/C/T/E, Q3-like Balancing
 - **Bot**: ARMED (schießt) / PASSIVE (Default: schießt nicht)
 - **BOTS**: 1-4 (Multi-Bot System, dynamisch änderbar)
-- **PK BHOP**: ON/OFF (Painkiller Bunny-Hop mit Timing-Fenster)
+- **MOVEMENT**: ZPMA (Default) / PAINKILLER (Bunny-Hop mit Timing-Fenster)
 - **WALL JUMP**: ON/OFF (Warsow Wall-Jump)
 - **TEXTURES**: ON/OFF (Boden- und Wandtexturen)
 - **MOUSE Y**: INVERT (Default) / NORMAL

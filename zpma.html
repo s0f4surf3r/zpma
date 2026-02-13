@@ -43,16 +43,29 @@ canvas { display: block; width: 100vw; height: 100vh; }
 #overlay.hidden { display: none; }
 .menu-title {
   font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif;
-  font-size: 96px; color: #f0ece6; font-weight: 900;
-  letter-spacing: 16px;
+  font-size: 140px; color: #f0ece6; font-weight: 900;
+  letter-spacing: -3px;
   text-shadow: 0 0 30px rgba(42,191,191,0.7), 0 0 60px rgba(42,191,191,0.3), 0 2px 0 rgba(0,0,0,0.4);
-  margin-bottom: 36px;
+  margin-bottom: 6px; line-height: 1; text-align: center;
+}
+.menu-subtitle {
+  font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  font-size: 22px; color: #2abfbf; font-weight: 400;
+  letter-spacing: 8px; text-transform: uppercase;
+  text-shadow: 0 0 12px rgba(42,191,191,0.4);
+  margin-bottom: 6px; text-align: center;
+}
+.menu-credit {
+  font-family: 'Courier New', monospace;
+  font-size: 13px; color: #3a6080; letter-spacing: 2px;
+  margin-bottom: 48px; text-align: center;
 }
 .menu-row {
-  display: flex; align-items: center; gap: 12px; margin: 8px 0;
+  display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0;
+  transform: translateX(-20px);
 }
 .menu-label {
-  color: #3a6080; font-size: 15px; width: 70px; text-align: right;
+  color: #3a6080; font-size: 15px; min-width: 80px; text-align: right; flex-shrink: 0;
 }
 .menu-btn {
   font-family: 'Courier New', monospace; font-size: 15px;
@@ -93,6 +106,8 @@ canvas { display: block; width: 100vw; height: 100vh; }
 <div id="dmgflash"></div>
 <div id="overlay">
   <div class="menu-title">ZPMA</div>
+  <div class="menu-subtitle">Zoe ProMod Arena</div>
+  <div class="menu-credit">by Jochen Hornung Dev Studios</div>
   <div class="menu-row">
     <span class="menu-label">MODE</span>
     <button class="menu-btn" id="btn-rocket">ROCKET</button>
@@ -112,9 +127,9 @@ canvas { display: block; width: 100vw; height: 100vh; }
     <button class="menu-btn" id="btn-bots4">4</button>
   </div>
   <div class="menu-row">
-    <span class="menu-label">BHOP</span>
-    <button class="menu-btn" id="btn-bhop-on">PK MODE</button>
-    <button class="menu-btn active" id="btn-bhop-off">OFF</button>
+    <span class="menu-label">MOVEMENT</span>
+    <button class="menu-btn active" id="btn-bhop-off">ZPMA</button>
+    <button class="menu-btn" id="btn-bhop-on">PAINKILLER</button>
   </div>
   <div class="menu-row">
     <span class="menu-label">WALLJUMP</span>
@@ -2410,17 +2425,23 @@ function updateBot(b, dt) {
     b.insideSolidCount = 0;
   }
 
-  // Stuck detection: prüft XYZ-Bewegung (nicht nur horizontal!)
+  // Stuck detection: prüft XYZ-Bewegung
   const moveDelta = Math.abs(b.x - b.lastX) + Math.abs(b.y - (b.lastY||b.y)) + Math.abs(b.z - b.lastZ);
-  if (moveDelta < 1 && b.onGround) { b.stuckTime += dt; } else { b.stuckTime = 0; }
+  if (moveDelta < 3 && b.onGround) { b.stuckTime += dt; } else { b.stuckTime = 0; }
   b.lastX = b.x; b.lastY = b.y; b.lastZ = b.z;
-  if (b.stuckTime > 2.0) {
-    // Bot hängt wirklich fest → respawnen
+  if (b.stuckTime > 1.5) {
     spawnBot(b);
     return;
-  } else if (b.stuckTime > 0.8) {
+  } else if (b.stuckTime > 0.4) {
     b.target = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
-    if (b.onGround) { b.vy = CFG.sv_jumpvelocity; b.onGround = false; }
+    if (b.onGround) {
+      b.vy = CFG.sv_jumpvelocity;
+      b.onGround = false;
+      // Zufällige Richtung zum Rauskommen
+      const ang = Math.random() * Math.PI * 2;
+      b.vx = Math.cos(ang) * 250;
+      b.vz = Math.sin(ang) * 250;
+    }
   }
 
   // Random jump
